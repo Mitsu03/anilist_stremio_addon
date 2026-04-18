@@ -13,10 +13,6 @@ const malService = require('./services/mal');
 const imdbService = require('./services/imdb');
 const { ADDON_MANIFEST, MAL_MANIFEST, IMDB_MANIFEST, ANILIST_CATALOGS, MAL_CATALOGS, IMDB_CATALOGS } = require('./config/constants');
 
-// Global dedup map: "service:animeId:episode" -> timestamp of last update
-const recentlyUpdated = new Map();
-const UPDATE_COOLDOWN_MS = 60 * 1000;
-
 // Maps the genre filter label to each service's status value
 const ANILIST_STATUS_MAP = {
   'Currently Watching': 'CURRENT',
@@ -307,17 +303,17 @@ async function getStream(type, id, videoInfo, username, service, malClientId) {
         tokenManager.cleanupOldSessions(actualService, username);
         tokenManager.storeWatchSession(actualService, username, animeId, videoInfo.episode);
 
-        // Global dedup: prevent multiple requests from updating same anime+ep within cooldown
-        const dedupKey = `${actualService}:${animeId}:${videoInfo.episode}`;
-        const lastUpdate = recentlyUpdated.get(dedupKey) || 0;
-        if (Date.now() - lastUpdate >= UPDATE_COOLDOWN_MS) {
-          recentlyUpdated.set(dedupKey, Date.now());
+        // Only update after watching the same episode for 5+ minutes
+        if (tokenManager.shouldUpdateProgress(actualService, username, animeId, videoInfo.episode)) {
+          tokenManager.markProgressUpdated(actualService, username, animeId, videoInfo.episode);
           if (actualService === 'mal') {
             await malService.updateProgress(animeId, videoInfo.episode, username, malClientId);
           } else {
             await anilistService.updateProgress(animeId, videoInfo.episode, username);
           }
-          console.log(`✅ Updated progress for ${actualService} anime ${animeId}: episode ${videoInfo.episode}`);
+          console.log(`✅ Updated progress for ${actualService} anime ${animeId}: episode ${videoInfo.episode} (5min threshold met)`);
+        } else {
+          console.log(`⏳ Watch session for ${actualService} anime ${animeId} ep ${videoInfo.episode} - waiting for 5min threshold`);
         }
       } catch (progressError) {
         console.error(`Failed to update progress for ${actualService} anime ${animeId}:`, progressError.message);

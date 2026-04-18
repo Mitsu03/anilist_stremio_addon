@@ -182,6 +182,10 @@ function shouldUpdateProgress(service, token, animeId, episode) {
   const key = _sessionKey(service, token, animeId, episode);
   const session = watchSessions[key];
   if (!session) return false;
+  // Must have been watching for at least 5 minutes
+  const WATCH_THRESHOLD_MS = 5 * 60 * 1000;
+  if (Date.now() - session.startTime < WATCH_THRESHOLD_MS) return false;
+  // Don't re-update within 60 seconds of the last update
   if (session.lastUpdated > 0 && (Date.now() - session.lastUpdated) < 60 * 1000) return false;
   return true;
 }
