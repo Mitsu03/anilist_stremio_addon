@@ -54,11 +54,12 @@ const META_FIELDS = [
 ].join(',');
 
 /**
- * Fetches a user's currently watching anime from MAL.
+ * Fetches a user's anime list from MAL.
  *
  * @async
  * @param {string} username - MAL username
  * @param {string} clientId - MAL API Client ID
+ * @param {string} status - MAL list status filter
  * @returns {Promise<Array<Object>>} Array of Stremio meta objects
  * @throws {Error} If the MAL API request fails
  */
@@ -342,33 +343,27 @@ function buildMeta(anime, progressEpisodes, kitsuId) {
 }
 
 /**
- * Updates the user's progress for an anime on MyAnimeList
- * 
- * This function increments the progress (episodes watched) for a specific
- * anime in the user's MyAnimeList. Requires authentication.
- * 
+ * Updates the user's progress for an anime on MyAnimeList.
+ * Requires the user to have authenticated via OAuth (token stored in tokens.json).
+ *
  * @async
  * @param {string} animeId - MAL anime ID
  * @param {number} episode - Episode number that was watched
  * @param {string} username - User's MAL username
- * @param {string} clientId - MAL Client ID
+ * @param {string} clientId - MAL Client ID (unused here, kept for signature compat)
  * @returns {Promise<void>}
  * @throws {Error} If progress update fails
- * 
- * @example
- * await updateProgress("12345", 5, "myusername", "client_id");
  */
 async function updateProgress(animeId, episode, username, clientId) {
   try {
     console.log(`Updating progress for MAL anime ${animeId}: episode ${episode} for user ${username}`);
-    
-    // Get user's access token
+
     const tokens = tokenManager.getTokens('mal', username);
     if (!tokens) {
-      throw new Error('User not authenticated with MyAnimeList');
+      throw new Error('User not authenticated with MyAnimeList. Please authenticate via the configure page.');
     }
-    
-    const response = await axios.patch(
+
+    await axios.patch(
       `${MAL_API_URL}/anime/${animeId}/my_list_status`,
       new URLSearchParams({ num_watched_episodes: episode }),
       {
@@ -379,9 +374,9 @@ async function updateProgress(animeId, episode, username, clientId) {
         timeout: 10000
       }
     );
-    
+
     console.log(`Successfully updated MAL progress for anime ${animeId} to episode ${episode}`);
-    
+
   } catch (error) {
     console.error(`Error updating progress for anime ${animeId}:`, error.message);
     throw new Error(`Failed to update progress: ${error.message}`);

@@ -71,9 +71,9 @@ const manifest = getManifest('anilist');
  * const catalog = await getCatalog("anime", "anilist.watching");
  * // Returns: { metas: [{ id: "anilist:12345", name: "...", ... }] }
  */
-async function getCatalog(type, id, extra, token, service, malClientId) {
+async function getCatalog(type, id, extra, username, service, malClientId) {
   try {
-    console.log(`Catalog request - Service: ${service}, Type: ${type}, ID: ${id}, Extra: ${extra || 'none'}`);    
+    console.log(`Catalog request - Service: ${service}, Type: ${type}, ID: ${id}, Extra: ${extra || 'none'}, User: ${username}`);
 
     if (type !== 'anime' && type !== 'series') {
       console.warn(`Invalid type "${type}" for catalog "${id}". Expected "anime" or "series".`);
@@ -91,14 +91,14 @@ async function getCatalog(type, id, extra, token, service, malClientId) {
 
     if (service === 'mal' && id === 'mal.list') {
       const malStatus = MAL_STATUS_MAP[genreFilter] || 'watching';
-      const metas = await malService.getAnimeList(token, malClientId, malStatus);
+      const metas = await malService.getAnimeList(username, malClientId, malStatus);
       console.log(`Returning ${metas.length} items for MAL catalog [${genreFilter}]`);
       return { metas };
     }
 
     if (service === 'anilist' && id === 'anilist.list') {
       const anilistStatus = ANILIST_STATUS_MAP[genreFilter] || 'CURRENT';
-      const metas = await anilistService.getAnimeList(token, anilistStatus);
+      const metas = await anilistService.getAnimeList(username, anilistStatus);
       console.log(`Returning ${metas.length} items for AniList catalog [${genreFilter}]`);
       return { metas };
     }
@@ -131,16 +131,16 @@ async function getCatalog(type, id, extra, token, service, malClientId) {
  * const meta = await getMeta("anime", "anilist:12345");
  * // Returns: { meta: { id: "anilist:12345", name: "...", ... } }
  */
-async function getMeta(type, id, token, service, malClientId) {
+async function getMeta(type, id, username, service, malClientId) {
   try {
-    console.log(`Meta request - Service: ${service}, Type: ${type}, ID: ${id} (token present: ${!!token})`);    
+    console.log(`Meta request - Service: ${service}, Type: ${type}, ID: ${id}`);
 
     if (type !== 'anime' && type !== 'series') {
       throw new Error(`Unsupported content type: ${type}`);
     }
 
     if (service === 'mal') {
-      if (!id.startsWith('mal:')) {
+      if (!id.startsWith('mal:') && !id.startsWith('kitsu:')) {
         return { meta: null };
       }
       const meta = await malService.getAnimeMeta(id, malClientId);
@@ -177,12 +177,12 @@ async function getMeta(type, id, token, service, malClientId) {
  * @param {string} malClientId - MAL Client ID (for MAL service)
  * @returns {Promise<Object>} Stream response object
  */
-async function getStream(type, id, videoInfo, token, service, malClientId) {
+async function getStream(type, id, videoInfo, username, service, malClientId) {
   try {
-    console.log(`Stream request - Service: ${service}, Type: ${type}, ID: ${id}, Video: ${JSON.stringify(videoInfo)} (token present: ${!!token})`);    
+    console.log(`Stream request - Service: ${service}, Type: ${type}, ID: ${id}, Video: ${JSON.stringify(videoInfo)}`);
 
-    if (type !== 'anime' && type !== 'series') {
-      throw new Error(`Unsupported content type: ${type}`);
+    if (type !== 'anime' && type !== 'series' && type !== 'movie') {
+      return { streams: [] };
     }
 
     // Extract anime ID from the content ID
@@ -190,10 +190,26 @@ async function getStream(type, id, videoInfo, token, service, malClientId) {
     let actualService = service;
 
     if (service === 'mal') {
-      if (!id.startsWith('mal:')) {
+      if (id.startsWith('mal:')) {
+        animeId = id.split(':')[1];
+      } else if (id.startsWith('kitsu:')) {
+        // MAL catalog serves items with kitsu: IDs — map back to MAL ID for progress updates
+        const kitsuId = id.split(':')[1];
+        try {
+          const malId = await malService.mapKitsuToMal(kitsuId);
+          if (!malId) {
+            console.log(`Could not map Kitsu ID ${kitsuId} to MAL ID`);
+            return { streams: [] };
+          }
+          animeId = malId;
+          console.log(`Mapped Kitsu ID ${kitsuId} to MAL ID ${animeId}`);
+        } catch (mappingError) {
+          console.error(`Failed to map Kitsu ID ${kitsuId} to MAL ID:`, mappingError.message);
+          return { streams: [] };
+        }
+      } else {
         return { streams: [] };
       }
-      animeId = id.substring(4); // Remove 'mal:' prefix
     } else {
       // Default: AniList - handle both anilist: and kitsu: IDs
       if (id.startsWith('anilist:')) {
@@ -238,18 +254,18 @@ async function getStream(type, id, videoInfo, token, service, malClientId) {
     if (videoInfo && videoInfo.episode) {
       try {
         const tokenManager = require('./config/tokens');
-        tokenManager.cleanupOldSessions(actualService, token);
-        tokenManager.storeWatchSession(actualService, token, animeId, videoInfo.episode);
+        tokenManager.cleanupOldSessions(actualService, username);
+        tokenManager.storeWatchSession(actualService, username, animeId, videoInfo.episode);
 
-        // Global dedup: prevent multiple tokens/requests from updating same anime+ep within cooldown
+        // Global dedup: prevent multiple requests from updating same anime+ep within cooldown
         const dedupKey = `${actualService}:${animeId}:${videoInfo.episode}`;
         const lastUpdate = recentlyUpdated.get(dedupKey) || 0;
         if (Date.now() - lastUpdate >= UPDATE_COOLDOWN_MS) {
           recentlyUpdated.set(dedupKey, Date.now());
           if (actualService === 'mal') {
-            await malService.updateProgress(animeId, videoInfo.episode, token, malClientId);
+            await malService.updateProgress(animeId, videoInfo.episode, username, malClientId);
           } else {
-            await anilistService.updateProgress(animeId, videoInfo.episode, token);
+            await anilistService.updateProgress(animeId, videoInfo.episode, username);
           }
           console.log(`✅ Updated progress for ${actualService} anime ${animeId}: episode ${videoInfo.episode}`);
         }

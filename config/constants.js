@@ -29,15 +29,11 @@ const DEFAULT_PORT = 3000;
  */
 const ADDON_MANIFEST = {
   id: 'community.anilist-stremio',
-  version: '1.6.0',
+  version: '1.7.0',
   name: 'AniList Sync',
   description: 'Syncs your AniList Currently Watching anime to Stremio library',
-  types: ['series', 'anime'],
-  resources: [
-    'catalog',
-    { name: 'meta', types: ['series', 'anime'], idPrefixes: ['anilist:', 'kitsu:', 'tt'] },
-    { name: 'stream', types: ['series', 'anime'], idPrefixes: ['anilist:', 'kitsu:', 'tt'] }
-  ],
+  types: ['anime', 'series', 'movie'],
+  resources: ['catalog', 'meta', 'stream'],
   idPrefixes: ['anilist:', 'kitsu:', 'tt'],
   contactEmail: 'contact@example.com'
 };
@@ -48,16 +44,12 @@ const ADDON_MANIFEST = {
  */
 const MAL_MANIFEST = {
   id: 'community.mal-stremio',
-  version: '1.6.0',
+  version: '1.7.2',
   name: 'MyAnimeList Sync',
   description: 'Syncs your MyAnimeList Currently Watching anime to Stremio library',
-  types: ['series', 'anime'],
-  resources: [
-    'catalog',
-    { name: 'meta', types: ['series', 'anime'], idPrefixes: ['mal:'] },
-    { name: 'stream', types: ['series', 'anime'], idPrefixes: ['mal:'] }
-  ],
-  idPrefixes: ['mal:'],
+  types: ['anime', 'series', 'movie'],
+  resources: ['catalog', 'meta', 'stream'],
+  idPrefixes: ['kitsu:', 'mal:'],
   contactEmail: 'contact@example.com'
 };
 
