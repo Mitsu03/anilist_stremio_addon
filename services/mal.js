@@ -383,11 +383,32 @@ async function updateProgress(animeId, episode, username, clientId) {
   }
 }
 
+/**
+ * Fetches the authenticated user's username from MAL using their access token.
+ *
+ * @async
+ * @param {string} accessToken - MAL OAuth access token
+ * @returns {Promise<string|null>} MAL username or null
+ */
+async function getAuthenticatedUsername(accessToken) {
+  try {
+    const response = await axios.get(`${MAL_API_URL}/users/@me`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+    return response.data?.name || null;
+  } catch (err) {
+    console.error('Failed to fetch MAL username from @me:', err.message);
+    return null;
+  }
+}
+
 module.exports = {
   getAnimeList,
   getAnimeMeta,
   updateProgress,
-  mapKitsuToMal
+  mapKitsuToMal,
+  getAuthenticatedUsername
 };
 
 /**

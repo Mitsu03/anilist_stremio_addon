@@ -132,28 +132,24 @@ function hasValidTokens(service, username) {
   return getTokens(service, username) !== null;
 }
 
+// In-memory PKCE verifier store (ephemeral, keyed by random session ID)
+const _pkceStore = {};
+
 /**
- * Persist a PKCE code_verifier for a MAL OAuth flow (embedded in state param)
+ * Store a PKCE code_verifier for a MAL OAuth flow, keyed by session ID.
  */
-function storePkceVerifier(username, verifier) {
-  const tokens = loadTokens();
-  const userKey = getUserKey('mal', username);
-  if (!tokens[userKey]) tokens[userKey] = {};
-  tokens[userKey].pkce_verifier = verifier;
-  saveTokens(tokens);
+function storePkceVerifier(sessionId, verifier) {
+  _pkceStore[sessionId] = verifier;
+  // Auto-expire after 10 minutes
+  setTimeout(() => { delete _pkceStore[sessionId]; }, 10 * 60 * 1000);
 }
 
 /**
- * Retrieve and delete a stored PKCE code_verifier
+ * Retrieve and delete a stored PKCE code_verifier by session ID.
  */
-function getPkceVerifier(username) {
-  const tokens = loadTokens();
-  const userKey = getUserKey('mal', username);
-  const verifier = tokens[userKey]?.pkce_verifier || null;
-  if (verifier) {
-    delete tokens[userKey].pkce_verifier;
-    saveTokens(tokens);
-  }
+function getPkceVerifier(sessionId) {
+  const verifier = _pkceStore[sessionId] || null;
+  delete _pkceStore[sessionId];
   return verifier;
 }
 
@@ -170,12 +166,14 @@ function _sessionKey(service, token, animeId, episode) {
 
 function storeWatchSession(service, token, animeId, episode) {
   const key = _sessionKey(service, token, animeId, episode);
+  const isNew = !watchSessions[key];
   watchSessions[key] = {
     startTime: watchSessions[key]?.startTime ?? Date.now(),
     lastAccess: Date.now(),
     lastUpdated: watchSessions[key]?.lastUpdated ?? 0
   };
   console.log(`Watch session stored: anime ${animeId} ep ${episode}`);
+  return isNew;
 }
 
 function shouldUpdateProgress(service, token, animeId, episode) {

@@ -51,7 +51,6 @@ function configurePageHandler(req, res) {
   const protocol = req.headers['x-forwarded-proto'] || 'http';
   const baseUrl = protocol + '://' + host;
   const anilistOk = !!config.anilistClientId;
-  const malOk = !!config.malClientId;
   const malOauthOk = !!(config.malClientId && config.malClientSecret);
 
   res.setHeader('Content-Type', 'text/html');
@@ -135,28 +134,21 @@ function configurePageHandler(req, res) {
     <!-- MAL section -->
     <div class="section">
       <div class="section-title"><span class="section-badge badge-mal">M</span> MyAnimeList</div>
-      ${!malOk ? '<div class="warn">MAL support requires <strong>MAL_CLIENT_ID</strong> in .env.<br>Register at <a href="https://myanimelist.net/apiconfig" target="_blank" rel="noopener">myanimelist.net/apiconfig</a>.</div>' : ''}
-      <div id="mal-form"${!malOk ? ' style="display:none"' : ''}>
-        <label for="mal-username">MyAnimeList username</label>
-        <input type="text" id="mal-username" placeholder="e.g. Mitsukuri"
-               autocomplete="off" spellcheck="false" maxlength="20">
-        <p class="hint" id="mal-hint">Letters, numbers, hyphens and underscores (2&ndash;20 chars).</p>
-
-        <div id="mal-result" style="display:none" class="result">
-          <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:9px;padding:.65rem .9rem;font-family:monospace;font-size:.8rem;color:#a0c4ff;word-break:break-all;margin-bottom:.8rem" id="mal-url-display"></div>
-          <div class="actions">
-            <button class="btn btn-copy" onclick="malCopy()">&#x1F4CB;&nbsp; Copy URL</button>
-            <a class="btn btn-stremio" id="mal-stremio" href="#">&#x25B6;&nbsp; Open in Stremio</a>
-          </div>
-          <p class="copied" id="mal-copied"></p>
-
-          ${malOauthOk ? `<div class="divider" style="margin-top:1.5rem"></div>
-          <p style="font-size:.8rem;color:#555;margin-bottom:.9rem">Authenticate to enable automatic episode progress syncing.</p>
-          <div id="mal-auth-area">
-            <button class="btn btn-login" id="mal-auth-btn" onclick="malAuthenticate()">&#x1F511;&nbsp; Login with MyAnimeList</button>
-          </div>
-          <p class="hint" id="mal-auth-status" style="margin-top:.5rem"></p>` : '<p style="font-size:.75rem;color:#444;margin-top:1rem">Episode progress syncing is not available on this server (MAL OAuth not configured).</p>'}
+      ${!malOauthOk ? '<div class="warn">MAL support requires <strong>MAL_CLIENT_ID</strong> and <strong>MAL_CLIENT_SECRET</strong> in .env.<br>Register at <a href="https://myanimelist.net/apiconfig" target="_blank" rel="noopener">myanimelist.net/apiconfig</a>.</div>' : ''}
+      <div id="mal-pre"${!malOauthOk ? ' style="display:none"' : ''}>
+        <button class="btn btn-login" onclick="malConnect()">&#x1F511;&nbsp; Connect to MyAnimeList</button>
+        <p class="pre-hint">You will be redirected to MyAnimeList to authorize,<br>then returned here automatically.</p>
+      </div>
+      <div id="mal-post" style="display:none" class="result">
+        <input type="hidden" id="mal-username" value="">
+        <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:9px;padding:.65rem .9rem;font-family:monospace;font-size:.8rem;color:#a0c4ff;word-break:break-all;margin-bottom:.8rem" id="mal-url-display"></div>
+        <div class="actions">
+          <button class="btn btn-copy" onclick="malCopy()">&#x1F4CB;&nbsp; Copy URL</button>
+          <a class="btn btn-stremio" id="mal-stremio" href="#">&#x25B6;&nbsp; Open in Stremio</a>
         </div>
+        <p class="copied" id="mal-copied"></p>
+        <p class="hint" id="mal-auth-status" style="margin-top:.5rem"></p>
+        <button class="btn-switch" onclick="malReset()">Switch account</button>
       </div>
     </div>
 
@@ -192,13 +184,18 @@ function configurePageHandler(req, res) {
   <script>
     var BASE = '${baseUrl}';
 
-    // On return from /auth/anilist/callback the token comes back in the hash
+    // On return from OAuth callbacks the result comes back in the hash
     (function() {
       var params = new URLSearchParams(window.location.hash.substring(1));
       var alToken = params.get('anilist_token');
       if (alToken) {
         history.replaceState(null, '', window.location.pathname);
         showAlResult(decodeURIComponent(alToken));
+      }
+      var malUser = params.get('mal_username');
+      if (malUser) {
+        history.replaceState(null, '', window.location.pathname);
+        showMalResult(decodeURIComponent(malUser));
       }
     })();
 
@@ -230,75 +227,42 @@ function configurePageHandler(req, res) {
       });
     }
 
-    // MAL — username input generates install URL; auth button triggers server-side OAuth
-    var MAL_RE = /^[a-zA-Z0-9_-]{2,20}$/;
+    // MAL — single Connect button triggers OAuth; username discovered automatically
+    function malConnect() {
+      window.location.href = BASE + '/auth/mal/connect';
+    }
 
-    document.getElementById('mal-username') && document.getElementById('mal-username').addEventListener('input', malUsernameChanged);
-
-    function malUsernameChanged() {
-      var val = document.getElementById('mal-username').value.trim();
-      var hint = document.getElementById('mal-hint');
-      var result = document.getElementById('mal-result');
-      if (!val) {
-        hint.textContent = 'Letters, numbers, hyphens and underscores (2\u201320 chars).';
-        hint.classList.remove('err');
-        result.style.display = 'none';
-        updateInstallAll();
-        return;
-      }
-      if (!MAL_RE.test(val)) {
-        hint.textContent = 'Invalid username.';
-        hint.classList.add('err');
-        result.style.display = 'none';
-        updateInstallAll();
-        return;
-      }
-      hint.textContent = '';
-      hint.classList.remove('err');
-      var url = BASE + '/mal/' + encodeURIComponent(val) + '/manifest.json';
+    function showMalResult(username) {
+      var url = BASE + '/mal/' + encodeURIComponent(username) + '/manifest.json';
+      document.getElementById('mal-username').value = username;
       document.getElementById('mal-url-display').textContent = url;
       document.getElementById('mal-stremio').href = 'stremio://' + url.replace(/^https?:\\/\\//, '');
-      result.style.display = 'block';
-      malCheckAuthStatus(val);
-      try { localStorage.setItem('mal-username', val); } catch(e) {}
-      updateInstallAll();
-    }
-
-    function malAuthenticate() {
-      var username = document.getElementById('mal-username').value.trim();
-      if (!username) return;
-      window.open(BASE + '/auth/mal/' + encodeURIComponent(username), '_blank');
-      var statusEl = document.getElementById('mal-auth-status');
-      if (statusEl) {
-        statusEl.textContent = '\u23F3 Waiting for authentication\u2026';
-        statusEl.classList.remove('err');
-      }
-      function onAuthMessage(event) {
-        if (event.data && event.data.type === 'auth_success' && event.data.service === 'mal') {
-          window.removeEventListener('message', onAuthMessage);
-          malCheckAuthStatus(username);
-        }
-      }
-      window.addEventListener('message', onAuthMessage);
-    }
-
-    function malCheckAuthStatus(username) {
-      if (!username || !MAL_RE.test(username)) return;
-      var statusEl = document.getElementById('mal-auth-status');
-      var authBtn = document.getElementById('mal-auth-btn');
-      if (!statusEl || !authBtn) return;
+      document.getElementById('mal-pre').style.display = 'none';
+      document.getElementById('mal-post').style.display = 'block';
+      // Check auth status
       fetch(BASE + '/auth/mal/' + encodeURIComponent(username) + '/status')
         .then(function(r) { return r.json(); })
         .then(function(data) {
+          var statusEl = document.getElementById('mal-auth-status');
           if (data.authenticated) {
             statusEl.textContent = '\u2705 Authenticated \u2014 progress updates enabled';
-            statusEl.classList.remove('err');
-            authBtn.textContent = '\uD83D\uDD11\u00A0 Re-authenticate with MyAnimeList';
-          } else {
-            statusEl.textContent = '';
           }
         })
         .catch(function() {});
+      try { localStorage.setItem('mal-username', username); } catch(e) {}
+      updateInstallAll();
+    }
+
+    function malReset() {
+      document.getElementById('mal-post').style.display = 'none';
+      document.getElementById('mal-username').value = '';
+      document.getElementById('mal-url-display').textContent = '';
+      document.getElementById('mal-stremio').href = '#';
+      document.getElementById('mal-copied').textContent = '';
+      document.getElementById('mal-auth-status').textContent = '';
+      document.getElementById('mal-pre').style.display = 'block';
+      try { localStorage.removeItem('mal-username'); } catch(e) {}
+      updateInstallAll();
     }
 
     function malCopy() {
@@ -311,15 +275,12 @@ function configurePageHandler(req, res) {
       });
     }
 
-    // Restore MAL username from localStorage
+    // Restore MAL from localStorage
     (function() {
+      if (document.getElementById('mal-post').style.display !== 'none') return;
       try {
         var saved = localStorage.getItem('mal-username');
-        var input = document.getElementById('mal-username');
-        if (saved && input && !input.disabled) {
-          input.value = saved;
-          input.dispatchEvent(new Event('input'));
-        }
+        if (saved) showMalResult(saved);
       } catch(e) {}
     })();
 
@@ -458,54 +419,46 @@ app.get('/auth/anilist', (req, res) => {
   );
 });
 
-// Initiate MAL OAuth PKCE flow — uses server-side MAL_OAUTH credentials
-app.get('/auth/mal/:username', (req, res) => {
-  const { username } = req.params;
-
-  if (!isValidUsername(username)) {
-    return res.status(400).send('<h2>Invalid username.</h2><a href="/">Try again</a>');
-  }
+// Initiate MAL OAuth PKCE flow — no username needed, discovered after auth
+app.get('/auth/mal/connect', (req, res) => {
   if (!config.malClientId || !config.malClientSecret) {
     return res.status(400).send('<h2>MAL OAuth not configured on this server.</h2><a href="/">Try again</a>');
   }
 
   const host = req.headers.host || ('localhost:' + config.port);
   const protocol = req.headers['x-forwarded-proto'] || 'http';
-  const redirectUri = `${protocol}://${host}/auth/mal/${encodeURIComponent(username)}/callback`;
+  const redirectUri = `${protocol}://${host}/auth/mal/callback`;
 
   // MAL uses PKCE with plain method (code_challenge = code_verifier)
   const codeVerifier = crypto.randomBytes(32).toString('base64url');
-  tokenManager.storePkceVerifier(username, codeVerifier);
+  const sessionId = crypto.randomBytes(16).toString('hex');
+  tokenManager.storePkceVerifier(sessionId, codeVerifier);
 
   res.redirect(
     MAL_OAUTH.AUTH_URL +
     '?response_type=code' +
     '&client_id=' + encodeURIComponent(config.malClientId) +
     '&redirect_uri=' + encodeURIComponent(redirectUri) +
-    '&state=' + encodeURIComponent(`mal:${username}:${Date.now()}`) +
+    '&state=' + encodeURIComponent(sessionId) +
     '&code_challenge=' + codeVerifier +
     '&code_challenge_method=plain'
   );
 });
 
-// Exchange MAL auth code for access token and store in tokens.json
-app.get('/auth/mal/:username/callback', async (req, res) => {
-  const { username } = req.params;
-  const { code, error } = req.query;
+// Exchange MAL auth code for access token, discover username, store tokens
+app.get('/auth/mal/callback', async (req, res) => {
+  const { code, error, state } = req.query;
 
-  if (!isValidUsername(username)) {
-    return res.status(400).send('<h2>Invalid username.</h2>');
-  }
   if (error) {
     return res.status(400).send(`<h2>Authentication failed: ${error}</h2><a href="/">Try again</a>`);
   }
-  if (!code) {
+  if (!code || !state) {
     return res.status(400).send('<h2>No authorization code received.</h2><a href="/">Try again</a>');
   }
 
-  const codeVerifier = tokenManager.getPkceVerifier(username);
+  const codeVerifier = tokenManager.getPkceVerifier(state);
   if (!codeVerifier) {
-    return res.status(400).send('<h2>PKCE verifier not found. Please restart the authentication flow.</h2><a href="/">Try again</a>');
+    return res.status(400).send('<h2>Session expired. Please restart the authentication flow.</h2><a href="/">Try again</a>');
   }
 
   if (!config.malClientId || !config.malClientSecret) {
@@ -514,7 +467,7 @@ app.get('/auth/mal/:username/callback', async (req, res) => {
 
   const host = req.headers.host || ('localhost:' + config.port);
   const protocol = req.headers['x-forwarded-proto'] || 'http';
-  const redirectUri = `${protocol}://${host}/auth/mal/${encodeURIComponent(username)}/callback`;
+  const redirectUri = `${protocol}://${host}/auth/mal/callback`;
 
   try {
     const { data } = await axios.post(MAL_OAUTH.TOKEN_URL, new URLSearchParams({
@@ -529,22 +482,17 @@ app.get('/auth/mal/:username/callback', async (req, res) => {
       timeout: 10000
     });
 
+    // Discover the authenticated user's MAL username
+    const malService = require('./services/mal');
+    const username = await malService.getAuthenticatedUsername(data.access_token);
+    if (!username) {
+      return res.status(400).send('<h2>Could not retrieve your MAL username.</h2><a href="/">Try again</a>');
+    }
+
     tokenManager.storeTokens('mal', username, data);
 
-    res.send(`
-      <html>
-        <body style="font-family:-apple-system,sans-serif;text-align:center;padding:50px;background:#080810;color:#e0e0e0">
-          <h1>&#x2705; Authenticated!</h1>
-          <p>Progress updates are now enabled for <strong>${username}</strong>.</p>
-          <p>You can close this tab.</p>
-          <script>
-            if (window.opener) {
-              window.opener.postMessage({ type: 'auth_success', service: 'mal', username: '${username}' }, '*');
-            }
-          <\/script>
-        </body>
-      </html>
-    `);
+    // Redirect back to configure page with username in hash (same pattern as AniList)
+    res.redirect(`${protocol}://${host}/configure#mal_username=${encodeURIComponent(username)}`);
   } catch (err) {
     const detail = err.response?.data ? JSON.stringify(err.response.data, null, 2) : err.message;
     console.error('MAL OAuth callback error:', detail);

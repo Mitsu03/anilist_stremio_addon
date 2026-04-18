@@ -301,7 +301,7 @@ async function getStream(type, id, videoInfo, username, service, malClientId) {
       try {
         const tokenManager = require('./config/tokens');
         tokenManager.cleanupOldSessions(actualService, username);
-        tokenManager.storeWatchSession(actualService, username, animeId, videoInfo.episode);
+        const isNewSession = tokenManager.storeWatchSession(actualService, username, animeId, videoInfo.episode);
 
         // Only update after watching the same episode for 5+ minutes
         if (tokenManager.shouldUpdateProgress(actualService, username, animeId, videoInfo.episode)) {
@@ -314,6 +314,29 @@ async function getStream(type, id, videoInfo, username, service, malClientId) {
           console.log(`✅ Updated progress for ${actualService} anime ${animeId}: episode ${videoInfo.episode} (5min threshold met)`);
         } else {
           console.log(`⏳ Watch session for ${actualService} anime ${animeId} ep ${videoInfo.episode} - waiting for 5min threshold`);
+          // Stremio only calls the stream endpoint once, so schedule a deferred update
+          if (isNewSession) {
+            const _svc = actualService;
+            const _animeId = animeId;
+            const _ep = videoInfo.episode;
+            const _user = username;
+            const _clientId = malClientId;
+            setTimeout(async () => {
+              if (tokenManager.shouldUpdateProgress(_svc, _user, _animeId, _ep)) {
+                try {
+                  tokenManager.markProgressUpdated(_svc, _user, _animeId, _ep);
+                  if (_svc === 'mal') {
+                    await malService.updateProgress(_animeId, _ep, _user, _clientId);
+                  } else {
+                    await anilistService.updateProgress(_animeId, _ep, _user);
+                  }
+                  console.log(`✅ Updated progress for ${_svc} anime ${_animeId}: episode ${_ep} (deferred 5min)`);
+                } catch (e) {
+                  console.error(`Deferred progress update failed for ${_svc} anime ${_animeId}:`, e.message);
+                }
+              }
+            }, 5 * 60 * 1000 + 2000);
+          }
         }
       } catch (progressError) {
         console.error(`Failed to update progress for ${actualService} anime ${animeId}:`, progressError.message);
