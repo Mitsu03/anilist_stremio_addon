@@ -32,7 +32,7 @@ const ADDON_MANIFEST = {
   version: '1.3.0',
   name: 'AniList Sync',
   description: 'Syncs your AniList Currently Watching anime to Stremio library',
-  types: ['anime'],
+  types: ['anime', 'series', 'movie'],
   resources: ['catalog', 'meta'],
   contactEmail: 'contact@example.com'
 };
@@ -46,7 +46,7 @@ const MAL_MANIFEST = {
   version: '1.3.0',
   name: 'MyAnimeList Sync',
   description: 'Syncs your MyAnimeList Currently Watching anime to Stremio library',
-  types: ['anime'],
+  types: ['anime', 'series', 'movie'],
   resources: ['catalog', 'meta'],
   contactEmail: 'contact@example.com'
 };
