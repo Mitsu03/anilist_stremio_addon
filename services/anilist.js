@@ -21,6 +21,9 @@ const { ANILIST_API_URL, ANILIST_STATUS, POSTER_SHAPES } = require('../config/co
 // Cache viewer info so we only look it up once per token
 const viewerCache = new Map();
 
+// Cache kitsu ID → AniList ID, populated from catalog fetches
+const kitsuAnilistCache = new Map();
+
 const VIEWER_QUERY = `{ Viewer { id name } }`;
 
 const UPDATE_PROGRESS_MUTATION = `
@@ -51,6 +54,35 @@ async function getViewerInfo(token) {
   viewerCache.set(token, viewer);
   return viewer;
 }
+
+const ANIME_META_QUERY = `
+  query ($id: Int) {
+    Media(id: $id, type: ANIME) {
+      id
+      title {
+        english
+        romaji
+      }
+      description
+      coverImage {
+        large
+        medium
+      }
+      bannerImage
+      genres
+      averageScore
+      status
+      format
+      episodes
+      seasonYear
+      season
+      externalLinks {
+        url
+        site
+      }
+    }
+  }
+`;
 
 const ANIME_LIST_QUERY = `
   query ($userId: Int, $status: MediaListStatus) {
@@ -254,6 +286,9 @@ function transformToStremioMeta(entry) {
   const kitsuId = extractKitsuId(media.externalLinks);
   const id = kitsuId ? `kitsu:${kitsuId}` : `anilist:${media.id}`;
 
+  // Populate reverse cache so stream requests can map kitsu → anilist
+  if (kitsuId) kitsuAnilistCache.set(kitsuId, String(media.id));
+
   // Use 'movie' for films, 'series' for everything else so stream addons
   // (Comet, MediaFusion, AIO Streams) recognise the content type.
   const type = media.format === 'MOVIE' ? 'movie' : 'series';
@@ -302,24 +337,40 @@ function transformToStremioMeta(entry) {
  */
 async function getAnimeMeta(id) {
   try {
-    // Extract numeric ID from "anilist:12345" format
-    const anilistId = id.replace('anilist:', '');
-    
+    const anilistId = parseInt(id.replace('anilist:', ''), 10);
     console.log(`Fetching metadata for anime ID: ${anilistId}`);
-    
-    // TODO: Implement full metadata fetch from AniList
-    // For now, return basic structure
+
+    const response = await axios.post(
+      ANILIST_API_URL,
+      { query: ANIME_META_QUERY, variables: { id: anilistId } },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+
+    const media = response.data?.data?.Media;
+    if (!media) throw new Error('Anime not found on AniList');
+
+    const title = media.title.english || media.title.romaji;
+    const rating = media.averageScore ? (media.averageScore / 10).toFixed(1) : null;
+    const cleanDescription = media.description
+      ? media.description.replace(/<[^>]*>/g, '').trim()
+      : '';
+
     return {
       id,
       type: 'series',
       name: title,
-      description: media.description || '',
+      description: cleanDescription,
       poster: media.coverImage?.large || media.coverImage?.medium,
       background: media.bannerImage,
       genres: media.genres || [],
       imdbRating: rating,
-      releaseInfo: media.seasonYear ? String(media.seasonYear) : undefined,
-      videos
+      releaseInfo: media.seasonYear ? String(media.seasonYear) : undefined
     };
   } catch (error) {
     console.error(`Error fetching anime meta for ${id}:`, error.message);
@@ -327,10 +378,132 @@ async function getAnimeMeta(id) {
   }
 }
 
+const IMDB_MAP_QUERY = `
+  query ($search: String) {
+    Media(search: $search, type: ANIME) {
+      id
+    }
+  }
+`;
+
+async function mapKitsuToAniList(kitsuId) {
+  // Check cache first — populated by catalog fetches
+  if (kitsuAnilistCache.has(kitsuId)) {
+    return kitsuAnilistCache.get(kitsuId);
+  }
+  try {
+    // Use ?include=mappings (standard JSON:API) to get mapping data
+    const response = await axios.get(
+      `https://kitsu.io/api/edge/anime/${kitsuId}?include=mappings`,
+      {
+        headers: { 'Accept': 'application/vnd.api+json' },
+        timeout: 10000
+      }
+    );
+    const included = response.data?.included || [];
+    const anilistMapping = included.find(
+      item => item.type === 'mappings' && item.attributes?.externalSite === 'anilist/anime'
+    );
+    if (anilistMapping) {
+      const anilistId = anilistMapping.attributes.externalId;
+      kitsuAnilistCache.set(kitsuId, anilistId);
+      return anilistId;
+    }
+    // Fallback: try MAL mapping → AniList idMal lookup
+    const malMapping = included.find(
+      item => item.type === 'mappings' && item.attributes?.externalSite === 'myanimelist/anime'
+    );
+    if (malMapping) {
+      const anilistId = await mapMalIdToAniList(parseInt(malMapping.attributes.externalId, 10));
+      if (anilistId) {
+        kitsuAnilistCache.set(kitsuId, anilistId);
+        return anilistId;
+      }
+    }
+    return null;
+  } catch (err) {
+    console.error(`mapKitsuToAniList(${kitsuId}):`, err.message);
+    return null;
+  }
+}
+
+const MAL_ID_QUERY = `
+  query ($idMal: Int) {
+    Media(idMal: $idMal, type: ANIME) {
+      id
+    }
+  }
+`;
+
+async function mapMalIdToAniList(malId) {
+  try {
+    const response = await axios.post(
+      ANILIST_API_URL,
+      { query: MAL_ID_QUERY, variables: { idMal: malId } },
+      {
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        timeout: 10000
+      }
+    );
+    return response.data?.data?.Media?.id?.toString() || null;
+  } catch (err) {
+    console.error(`mapMalIdToAniList(${malId}):`, err.message);
+    return null;
+  }
+}
+
+async function mapImdbToAniList(imdbId) {
+  try {
+    // AniList doesn't have a direct IMDB lookup; search by IMDB ID string as fallback
+    const response = await axios.post(
+      ANILIST_API_URL,
+      { query: IMDB_MAP_QUERY, variables: { search: imdbId } },
+      {
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        timeout: 10000
+      }
+    );
+    return response.data?.data?.Media?.id?.toString() || null;
+  } catch (err) {
+    console.error(`mapImdbToAniList(${imdbId}):`, err.message);
+    return null;
+  }
+}
+
+async function updateProgress(animeId, episode, token) {
+  try {
+    const response = await axios.post(
+      ANILIST_API_URL,
+      {
+        query: UPDATE_PROGRESS_MUTATION,
+        variables: { mediaId: parseInt(animeId, 10), progress: episode }
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        timeout: 10000
+      }
+    );
+    const saved = response.data?.data?.SaveMediaListEntry;
+    if (!saved) throw new Error('No data returned from mutation');
+    console.log(`Updated AniList progress: anime ${animeId} ep ${saved.progress}`);
+    return saved;
+  } catch (err) {
+    console.error(`updateProgress(${animeId}, ep ${episode}):`, err.message);
+    throw err;
+  }
+}
+
 module.exports = {
   getViewerInfo,
   getAnimeList,
-  getAnimeMeta
+  getAnimeMeta,
+  mapKitsuToAniList,
+  mapImdbToAniList,
+  updateProgress
 };
 
 // Made with Bob

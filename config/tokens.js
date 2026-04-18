@@ -21,7 +21,8 @@ function storeWatchSession(service, token, animeId, episode) {
   const key = _sessionKey(service, token, animeId, episode);
   watchSessions[key] = {
     startTime: watchSessions[key]?.startTime ?? Date.now(),
-    lastAccess: Date.now()
+    lastAccess: Date.now(),
+    lastUpdated: watchSessions[key]?.lastUpdated ?? 0
   };
   console.log(`Watch session stored: anime ${animeId} ep ${episode}`);
 }
@@ -30,10 +31,14 @@ function shouldUpdateProgress(service, token, animeId, episode) {
   const key = _sessionKey(service, token, animeId, episode);
   const session = watchSessions[key];
   if (!session) return false;
-  const elapsed = Date.now() - session.startTime;
-  const fiveMinutes = 5 * 60 * 1000;
-  console.log(`Watch session ${animeId} ep ${episode}: ${Math.round(elapsed / 1000)}s elapsed (need ${Math.round(fiveMinutes / 1000)}s)`);
-  return elapsed >= fiveMinutes;
+  // Prevent duplicate updates within 60 seconds
+  if (session.lastUpdated > 0 && (Date.now() - session.lastUpdated) < 60 * 1000) return false;
+  return true;
+}
+
+function markProgressUpdated(service, token, animeId, episode) {
+  const key = _sessionKey(service, token, animeId, episode);
+  if (watchSessions[key]) watchSessions[key].lastUpdated = Date.now();
 }
 
 function updateWatchSessionAccess(service, token, animeId, episode) {
@@ -59,6 +64,7 @@ function cleanupOldSessions(service, token) {
 module.exports = {
   storeWatchSession,
   shouldUpdateProgress,
+  markProgressUpdated,
   updateWatchSessionAccess,
   cleanupOldSessions
 };

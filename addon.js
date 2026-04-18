@@ -241,13 +241,16 @@ async function getStream(type, id, videoInfo, token, service, malClientId) {
         // Start or update watch session
         tokenManager.storeWatchSession(actualService, token, animeId, videoInfo.episode);
 
-        // [TESTING] 5-minute wait removed — update progress immediately
-        if (actualService === 'mal') {
-          await malService.updateProgress(animeId, videoInfo.episode, token, malClientId);
-        } else {
-          await anilistService.updateProgress(animeId, videoInfo.episode, token);
+        // Only update if enough time has elapsed and not already updated recently
+        if (tokenManager.shouldUpdateProgress(actualService, token, animeId, videoInfo.episode)) {
+          tokenManager.markProgressUpdated(actualService, token, animeId, videoInfo.episode);
+          if (actualService === 'mal') {
+            await malService.updateProgress(animeId, videoInfo.episode, token, malClientId);
+          } else {
+            await anilistService.updateProgress(animeId, videoInfo.episode, token);
+          }
+          console.log(`✅ Updated progress for ${actualService} anime ${animeId}: episode ${videoInfo.episode}`);
         }
-        console.log(`✅ Updated progress for ${actualService} anime ${animeId}: episode ${videoInfo.episode}`);
       } catch (progressError) {
         console.error(`Failed to update progress for ${actualService} anime ${animeId}:`, progressError.message);
         // Don't fail the stream request if progress update fails
