@@ -12,6 +12,10 @@ const anilistService = require('./services/anilist');
 const malService = require('./services/mal');
 const { ADDON_MANIFEST, MAL_MANIFEST, ANILIST_CATALOGS, MAL_CATALOGS } = require('./config/constants');
 
+// Global dedup map: "service:animeId:episode" -> timestamp of last update
+const recentlyUpdated = new Map();
+const UPDATE_COOLDOWN_MS = 60 * 1000;
+
 // Maps the genre filter label to each service's status value
 const ANILIST_STATUS_MAP = {
   'Currently Watching': 'CURRENT',
@@ -234,16 +238,14 @@ async function getStream(type, id, videoInfo, token, service, malClientId) {
     if (videoInfo && videoInfo.episode) {
       try {
         const tokenManager = require('./config/tokens');
-        
-        // Clean up old watch sessions first
         tokenManager.cleanupOldSessions(actualService, token);
-
-        // Start or update watch session
         tokenManager.storeWatchSession(actualService, token, animeId, videoInfo.episode);
 
-        // Only update if enough time has elapsed and not already updated recently
-        if (tokenManager.shouldUpdateProgress(actualService, token, animeId, videoInfo.episode)) {
-          tokenManager.markProgressUpdated(actualService, token, animeId, videoInfo.episode);
+        // Global dedup: prevent multiple tokens/requests from updating same anime+ep within cooldown
+        const dedupKey = `${actualService}:${animeId}:${videoInfo.episode}`;
+        const lastUpdate = recentlyUpdated.get(dedupKey) || 0;
+        if (Date.now() - lastUpdate >= UPDATE_COOLDOWN_MS) {
+          recentlyUpdated.set(dedupKey, Date.now());
           if (actualService === 'mal') {
             await malService.updateProgress(animeId, videoInfo.episode, token, malClientId);
           } else {
@@ -253,7 +255,6 @@ async function getStream(type, id, videoInfo, token, service, malClientId) {
         }
       } catch (progressError) {
         console.error(`Failed to update progress for ${actualService} anime ${animeId}:`, progressError.message);
-        // Don't fail the stream request if progress update fails
       }
     }
 
