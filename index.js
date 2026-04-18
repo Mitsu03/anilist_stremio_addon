@@ -10,6 +10,7 @@
 
 const express = require('express');
 const axios = require('axios');
+const crypto = require('crypto');
 const addonInterface = require('./addon');
 const config = require('./config/env');
 const { HTTP_STATUS, ANILIST_OAUTH, MAL_OAUTH } = require('./config/constants');
@@ -71,13 +72,16 @@ app.get('/auth/:service/:username', (req, res) => {
     return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid username' });
   }
 
-  // Store user credentials if provided
+  // Store user credentials if provided, and use them directly without
+  // re-reading from file (guards against filesystem write failures on the server)
+  let credentials;
   if (client_id && client_secret) {
     tokenManager.storeCredentials(service, username, { client_id, client_secret });
+    credentials = { client_id, client_secret };
+  } else {
+    credentials = tokenManager.getCredentials(service, username);
   }
 
-  // Get stored credentials
-  const credentials = tokenManager.getCredentials(service, username);
   if (!credentials) {
     return res.status(HTTP_STATUS.BAD_REQUEST).json({ 
       error: 'OAuth credentials not provided. Please provide client_id and client_secret as query parameters.' 
@@ -90,12 +94,19 @@ app.get('/auth/:service/:username', (req, res) => {
   const redirectUri = `${baseUrl}/auth/${service}/${username}/callback`;
 
   let authUrl;
-  const state = `${service}:${username}:${Date.now()}`;
 
   if (service === 'anilist') {
+    const state = `${service}:${username}:${Date.now()}`;
     authUrl = `${ANILIST_OAUTH.AUTH_URL}?client_id=${credentials.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=${state}`;
   } else if (service === 'mal') {
-    authUrl = `${MAL_OAUTH.AUTH_URL}?response_type=code&client_id=${credentials.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
+    // MAL requires PKCE — generate a code_verifier and derive the code_challenge.
+    // MAL only supports the 'plain' challenge method (code_challenge = code_verifier).
+    // The verifier and credentials are embedded in the state parameter so the callback
+    // works even when the server filesystem is read-only.
+    const codeVerifier = crypto.randomBytes(32).toString('base64url');
+    // State format: mal:username:timestamp:codeVerifier:clientId:clientSecret
+    const state = `${service}:${username}:${Date.now()}:${codeVerifier}:${credentials.client_id}:${credentials.client_secret}`;
+    authUrl = `${MAL_OAUTH.AUTH_URL}?response_type=code&client_id=${credentials.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(state)}&code_challenge=${codeVerifier}&code_challenge_method=plain`;
   }
 
   res.redirect(authUrl);
@@ -131,16 +142,17 @@ app.get('/auth/:service/:username/callback', async (req, res) => {
     const baseUrl = `${protocol}://${host}`;
     const redirectUri = `${baseUrl}/auth/${service}/${username}/callback`;
 
-    // Get stored credentials
+    // Get stored credentials — only strictly required for AniList;
+    // MAL carries credentials in the state parameter.
     const credentials = tokenManager.getCredentials(service, username);
-    if (!credentials) {
+    if (!credentials && service === 'anilist') {
       return res.status(HTTP_STATUS.BAD_REQUEST).send('OAuth credentials not found');
     }
 
     let tokenResponse;
     const tokenData = {
-      client_id: credentials.client_id,
-      client_secret: credentials.client_secret,
+      client_id: credentials?.client_id,
+      client_secret: credentials?.client_secret,
       code,
       grant_type: 'authorization_code',
       redirect_uri: redirectUri
@@ -151,7 +163,29 @@ app.get('/auth/:service/:username/callback', async (req, res) => {
         headers: { 'Content-Type': 'application/json' }
       });
     } else if (service === 'mal') {
-      tokenResponse = await axios.post(MAL_OAUTH.TOKEN_URL, new URLSearchParams(tokenData), {
+      // Extract the code_verifier and credentials embedded in the state parameter.
+      // State format: mal:username:timestamp:codeVerifier:clientId:clientSecret
+      const stateParts = state ? decodeURIComponent(state).split(':') : [];
+      const codeVerifier = stateParts.length >= 4 ? stateParts[3] : null;
+      const stateClientId = stateParts.length >= 5 ? stateParts[4] : null;
+      const stateClientSecret = stateParts.length >= 6 ? stateParts[5] : null;
+      if (!codeVerifier) {
+        return res.status(HTTP_STATUS.BAD_REQUEST).send('PKCE verifier not found in state. Please restart the authentication flow.');
+      }
+      // Use credentials from state (reliable) with fallback to stored credentials
+      const effectiveClientId = stateClientId || credentials?.client_id;
+      const effectiveClientSecret = stateClientSecret || credentials?.client_secret;
+      if (!effectiveClientId || !effectiveClientSecret) {
+        return res.status(HTTP_STATUS.BAD_REQUEST).send('OAuth credentials not found. Please restart the authentication flow.');
+      }
+      tokenResponse = await axios.post(MAL_OAUTH.TOKEN_URL, new URLSearchParams({
+        client_id: effectiveClientId,
+        client_secret: effectiveClientSecret,
+        code,
+        grant_type: 'authorization_code',
+        redirect_uri: redirectUri,
+        code_verifier: codeVerifier
+      }), {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
       });
     }
@@ -161,16 +195,24 @@ app.get('/auth/:service/:username/callback', async (req, res) => {
     res.send(`
       <html>
         <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-          <h1>✅ Authentication Successful!</h1>
+          <h1>&#x2705; Authentication Successful!</h1>
           <p>You can now use progress updates for ${service === 'anilist' ? 'AniList' : 'MyAnimeList'}.</p>
-          <p><a href="${baseUrl}">Return to configuration page</a></p>
+          <p>You can close this tab and return to the configuration page.</p>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'auth_success', service: '${service}', username: '${username}' }, '*');
+            }
+          <\/script>
         </body>
       </html>
     `);
 
   } catch (error) {
-    console.error('OAuth callback error:', error.response?.data || error.message);
-    res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send('Authentication failed');
+    const detail = error.response?.data
+      ? JSON.stringify(error.response.data)
+      : error.message;
+    console.error('OAuth callback error:', detail);
+    res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send(`Authentication failed: ${detail}`);
   }
 });
 
@@ -517,7 +559,21 @@ app.get('/', (req, res) => {
         client_secret: clientSecret
       });
 
-      window.location.href = BASE + '/auth/' + service + '/' + username + '?' + params.toString();
+      const authUrl = BASE + '/auth/' + service + '/' + username + '?' + params.toString();
+      window.open(authUrl, '_blank');
+
+      const authStatus = document.getElementById(prefix + '-auth-status');
+      authStatus.textContent = '⏳ Waiting for authentication...';
+      authStatus.classList.remove('error');
+
+      // Listen for postMessage from the auth success page in the new tab
+      function onAuthMessage(event) {
+        if (event.data && event.data.type === 'auth_success' && event.data.service === service) {
+          window.removeEventListener('message', onAuthMessage);
+          checkAuthStatus(service, username);
+        }
+      }
+      window.addEventListener('message', onAuthMessage);
     }
 
     // Add listeners for credential inputs
@@ -544,27 +600,24 @@ app.get('/', (req, res) => {
     // Load stored credentials into form fields
     async function loadStoredCredentials() {
       try {
-        // Load AniList credentials
-        const anilistResponse = await fetch(BASE + '/auth/anilist/credentials');
-        if (anilistResponse.ok) {
-          const anilistCreds = await anilistResponse.json();
-          if (anilistCreds.client_id) {
-            document.getElementById('al-client-id').value = anilistCreds.client_id;
-          }
-          if (anilistCreds.client_secret) {
-            document.getElementById('al-client-secret').value = anilistCreds.client_secret;
+        const alUsername = localStorage.getItem('al-username');
+        const malUsername = localStorage.getItem('mal-username');
+
+        if (alUsername) {
+          const anilistResponse = await fetch(BASE + '/auth/anilist/' + encodeURIComponent(alUsername) + '/credentials');
+          if (anilistResponse.ok) {
+            const anilistCreds = await anilistResponse.json();
+            if (anilistCreds.client_id) document.getElementById('al-client-id').value = anilistCreds.client_id;
+            if (anilistCreds.client_secret) document.getElementById('al-client-secret').value = anilistCreds.client_secret;
           }
         }
 
-        // Load MAL credentials
-        const malResponse = await fetch(BASE + '/auth/mal/credentials');
-        if (malResponse.ok) {
-          const malCreds = await malResponse.json();
-          if (malCreds.client_id) {
-            document.getElementById('mal-client-id').value = malCreds.client_id;
-          }
-          if (malCreds.client_secret) {
-            document.getElementById('mal-client-secret').value = malCreds.client_secret;
+        if (malUsername) {
+          const malResponse = await fetch(BASE + '/auth/mal/' + encodeURIComponent(malUsername) + '/credentials');
+          if (malResponse.ok) {
+            const malCreds = await malResponse.json();
+            if (malCreds.client_id) document.getElementById('mal-client-id').value = malCreds.client_id;
+            if (malCreds.client_secret) document.getElementById('mal-client-secret').value = malCreds.client_secret;
           }
         }
       } catch (error) {
@@ -577,8 +630,31 @@ app.get('/', (req, res) => {
     setupCredentialInputs('anilist');
     setupCredentialInputs('mal');
 
-    // Load stored credentials when page loads
-    loadStoredCredentials();
+    // Persist usernames in localStorage so they survive page navigation
+    ['al-username', 'mal-username'].forEach(id => {
+      const input = document.getElementById(id);
+      if (!input) return;
+      input.addEventListener('input', () => {
+        localStorage.setItem(id, input.value.trim());
+      });
+    });
+
+    // Restore usernames from localStorage and trigger the input handler
+    // so the manifest URL and auth status are populated automatically
+    function restoreUsernames() {
+      ['al-username', 'mal-username'].forEach(id => {
+        const saved = localStorage.getItem(id);
+        if (!saved) return;
+        const input = document.getElementById(id);
+        if (!input) return;
+        input.value = saved;
+        input.dispatchEvent(new Event('input'));
+      });
+    }
+
+    // Load stored credentials when page loads, then restore usernames so that
+    // checkAuthStatus fires after credentials are already populated in the fields
+    loadStoredCredentials().then(restoreUsernames);
 
     function copyUrl(urlId) {
       const url = document.getElementById(urlId).textContent;
@@ -614,20 +690,21 @@ app.get('/auth/:service/:username/status', (req, res) => {
 });
 
 /**
- * GET /auth/:service/credentials
+ * GET /auth/:service/:username/credentials
  *
- * Get stored OAuth credentials for a service
+ * Get stored OAuth credentials for a user
  */
-app.get('/auth/:service/credentials', (req, res) => {
-  const { service } = req.params;
+app.get('/auth/:service/:username/credentials', (req, res) => {
+  const { service, username } = req.params;
 
   if (!VALID_SERVICES.has(service)) {
     return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Unknown service' });
   }
+  if (!isValidUsername(username)) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid username' });
+  }
 
-  // For demo purposes, return credentials for any user (since we store them globally)
-  // In a real app, you'd want to associate credentials with specific users
-  const credentials = tokenManager.getCredentials(service, 'dummy');
+  const credentials = tokenManager.getCredentials(service, username);
   if (credentials) {
     res.json(credentials);
   } else {

@@ -188,7 +188,7 @@ async function getStream(type, id, videoInfo, username, service, malClientId) {
   try {
     console.log(`Stream request - Service: ${service}, Type: ${type}, ID: ${id}, Video: ${JSON.stringify(videoInfo)}`);
 
-    if (type !== 'anime') {
+    if (type !== 'anime' && type !== 'series') {
       throw new Error(`Unsupported content type: ${type}`);
     }
 
@@ -197,10 +197,26 @@ async function getStream(type, id, videoInfo, username, service, malClientId) {
     let actualService = service;
 
     if (service === 'mal') {
-      if (!id.startsWith('mal:')) {
+      if (id.startsWith('mal:')) {
+        animeId = id.split(':')[1];
+      } else if (id.startsWith('kitsu:')) {
+        // MAL catalog serves items with kitsu: IDs — map back to MAL ID
+        const kitsuId = id.split(':')[1];
+        try {
+          const malId = await malService.mapKitsuToMal(kitsuId);
+          if (!malId) {
+            console.log(`Could not map Kitsu ID ${kitsuId} to MAL ID`);
+            return { streams: [] };
+          }
+          animeId = malId;
+          console.log(`Mapped Kitsu ID ${kitsuId} to MAL ID ${animeId}`);
+        } catch (mappingError) {
+          console.error(`Failed to map Kitsu ID ${kitsuId} to MAL ID:`, mappingError.message);
+          return { streams: [] };
+        }
+      } else {
         return { streams: [] };
       }
-      animeId = id.split(':')[1]; // Extract just the numeric ID, ignore season/episode parts
     } else {
       // Default: AniList - handle both anilist: and kitsu: IDs
       if (id.startsWith('anilist:')) {

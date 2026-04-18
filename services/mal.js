@@ -391,5 +391,30 @@ async function updateProgress(animeId, episode, username, clientId) {
 module.exports = {
   getAnimeList,
   getAnimeMeta,
-  updateProgress
+  updateProgress,
+  mapKitsuToMal
 };
+
+/**
+ * Maps a Kitsu anime ID to a MAL anime ID.
+ *
+ * @async
+ * @param {string} kitsuId - Kitsu anime ID
+ * @returns {Promise<string|null>} MAL ID or null if not found
+ */
+async function mapKitsuToMal(kitsuId) {
+  try {
+    const response = await axios.get(
+      `${KITSU_API_URL}/anime/${encodeURIComponent(kitsuId)}/mappings?filter[externalSite]=myanimelist/anime`,
+      {
+        headers: { 'Accept': 'application/vnd.api+json' },
+        timeout: 10000
+      }
+    );
+    const malId = response.data?.data?.[0]?.attributes?.externalId;
+    return malId ? String(malId) : null;
+  } catch (err) {
+    console.warn(`Kitsu→MAL mapping failed for kitsuId ${kitsuId}: ${err.message}`);
+    return null;
+  }
+}

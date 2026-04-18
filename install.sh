@@ -119,6 +119,16 @@ success "Dependencies installed"
 # ── Set ownership ─────────────────────────────────────────────────────────────
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 chmod 640 "$INSTALL_DIR/.env"
+# Ensure data dir is writable by the service user
+mkdir -p "$INSTALL_DIR/data"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/data"
+chmod 750 "$INSTALL_DIR/data"
+# Initialise tokens.json if missing so the service user can write to it immediately
+if [[ ! -f "$INSTALL_DIR/data/tokens.json" ]]; then
+  echo '{}' > "$INSTALL_DIR/data/tokens.json"
+fi
+chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/data/tokens.json"
+chmod 640 "$INSTALL_DIR/data/tokens.json"
 
 # ── Create systemd service ────────────────────────────────────────────────────
 SERVICE_FILE="/etc/systemd/system/anilist-stremio.service"
@@ -143,7 +153,7 @@ StandardError=journal
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=$INSTALL_DIR
+ReadWritePaths=$INSTALL_DIR/data
 
 [Install]
 WantedBy=multi-user.target

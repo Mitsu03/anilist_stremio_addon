@@ -86,12 +86,14 @@ rsync -a --delete \
   --exclude='.git' \
   --exclude='install.sh' \
   --exclude='update.sh' \
+  --exclude='data' \
   "$REPO_DIR/" "$INSTALL_DIR/" 2>/dev/null \
   || {
     # rsync not available — fall back to cp + manual excludes
     find "$REPO_DIR" -mindepth 1 -maxdepth 1 \
       ! -name '.env' ! -name '.env.bak' ! -name 'node_modules' \
       ! -name '.git' ! -name 'install.sh' ! -name 'update.sh' \
+      ! -name 'data' \
       -exec cp -r {} "$INSTALL_DIR/" \;
   }
 
@@ -106,6 +108,11 @@ success "Dependencies updated"
 # ── Restore ownership ─────────────────────────────────────────────────────────
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 chmod 640 "$INSTALL_DIR/.env"
+# Ensure data dir is writable by the service user
+mkdir -p "$INSTALL_DIR/data"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/data"
+chmod 750 "$INSTALL_DIR/data"
+[[ -f "$INSTALL_DIR/data/tokens.json" ]] && chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/data/tokens.json" && chmod 640 "$INSTALL_DIR/data/tokens.json"
 
 # ── Reload systemd unit in case it changed ────────────────────────────────────
 if [[ -f "/etc/systemd/system/anilist-stremio.service" ]]; then

@@ -35,11 +35,14 @@ function loadTokens() {
   try {
     ensureDataDir();
     if (fs.existsSync(TOKENS_FILE)) {
-      const data = fs.readFileSync(TOKENS_FILE, 'utf8');
+      const data = fs.readFileSync(TOKENS_FILE, 'utf8').trim();
+      if (!data) return {};
       return JSON.parse(data);
     }
   } catch (error) {
     console.error('Error loading tokens:', error.message);
+    // Overwrite the corrupted file so subsequent reads succeed
+    try { fs.writeFileSync(TOKENS_FILE, '{}'); } catch (_) {}
   }
   return {};
 }
@@ -152,10 +155,12 @@ function getTokens(service, username) {
     return null;
   }
 
-  // Check if token is expired
+  // Check if token is expired — only clear the token fields, keep credentials
   if (Date.now() >= userTokens.expires_at) {
     console.log(`Tokens expired for ${service} user: ${username}`);
-    delete tokens[userKey];
+    delete tokens[userKey].access_token;
+    delete tokens[userKey].refresh_token;
+    delete tokens[userKey].expires_at;
     saveTokens(tokens);
     return null;
   }
@@ -198,5 +203,38 @@ module.exports = {
   hasValidTokens,
   getUserKey,
   storeCredentials,
-  getCredentials
+  getCredentials,
+  storePkceVerifier,
+  getPkceVerifier
 };
+
+/**
+ * Persist a PKCE code_verifier for a MAL OAuth flow
+ *
+ * @param {string} username - User's MAL username
+ * @param {string} verifier - PKCE code_verifier string
+ */
+function storePkceVerifier(username, verifier) {
+  const tokens = loadTokens();
+  const userKey = getUserKey('mal', username);
+  if (!tokens[userKey]) tokens[userKey] = {};
+  tokens[userKey].pkce_verifier = verifier;
+  saveTokens(tokens);
+}
+
+/**
+ * Retrieve and delete a stored PKCE code_verifier
+ *
+ * @param {string} username - User's MAL username
+ * @returns {string|null} The verifier, or null if not found
+ */
+function getPkceVerifier(username) {
+  const tokens = loadTokens();
+  const userKey = getUserKey('mal', username);
+  const verifier = tokens[userKey]?.pkce_verifier || null;
+  if (verifier) {
+    delete tokens[userKey].pkce_verifier;
+    saveTokens(tokens);
+  }
+  return verifier;
+}

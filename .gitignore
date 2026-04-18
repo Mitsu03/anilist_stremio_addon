@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# User OAuth tokens - must never be committed
+data/tokens.json
+
 # Dependencies
 node_modules/
 npm-debug.log*
