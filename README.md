@@ -26,6 +26,7 @@ A Stremio addon that automatically syncs your AniList "Currently Watching" anime
   - Ratings (converted from AniList scores)
   - Release year
   - Watch progress
+- **Progress Updates**: Automatically updates your watch progress on AniList/MyAnimeList when you finish episodes in Stremio (requires authentication setup)
 - **Real-time Updates**: Catalog refreshes each time you open it in Stremio
 - **Error Handling**: Robust error handling with helpful error messages
 - **Easy Setup**: Simple configuration via environment variables
@@ -43,6 +44,13 @@ Before you begin, ensure you have the following installed:
 
 - Your AniList profile must be **publicly visible**
 - You should have at least one anime in your "Currently Watching" list
+- **For progress updates**: OAuth app registration and user authentication
+
+### MyAnimeList Requirements
+
+- Your MAL profile must be **publicly visible**
+- You should have at least one anime in your "Currently Watching" list
+- **For progress updates**: OAuth app registration and user authentication
 
 ## 🚀 Installation
 
@@ -75,17 +83,42 @@ cp .env.example .env
 Edit the `.env` file with your settings:
 
 ```env
-# Your AniList username (required)
-ANILIST_USERNAME=your_anilist_username
-
 # Server port (optional, defaults to 3000)
 PORT=3000
 
 # Node environment (optional, defaults to development)
 NODE_ENV=development
+
+# MyAnimeList API Client ID (optional, for MAL support)
+MAL_CLIENT_ID=your_mal_client_id
+
+# AniList OAuth (optional, for progress updates)
+ANILIST_CLIENT_ID=your_anilist_client_id
+ANILIST_CLIENT_SECRET=your_anilist_client_secret
+
+# MyAnimeList OAuth (optional, for progress updates)
+MAL_OAUTH_CLIENT_ID=your_mal_oauth_client_id
+MAL_OAUTH_CLIENT_SECRET=your_mal_oauth_client_secret
 ```
 
-**Important**: Replace `your_anilist_username` with your actual AniList username.
+#### OAuth Setup for Progress Updates
+
+To enable automatic progress updates when watching episodes in Stremio, each user needs to:
+
+1. **Register OAuth applications** on both platforms:
+   - **AniList**: Go to [AniList Developer Settings](https://anilist.co/settings/developer)
+   - **MyAnimeList**: Go to [MAL API Config](https://myanimelist.net/apiconfig)
+
+2. **Configure redirect URIs** (replace `your-domain.com` with your actual domain):
+   - AniList: `http://your-domain.com/auth/anilist/YOUR_USERNAME/callback`
+   - MyAnimeList: `http://your-domain.com/auth/mal/YOUR_USERNAME/callback`
+
+3. **Enter credentials** on the web interface:
+   - Visit `http://your-domain.com`
+   - Enter your username and OAuth Client ID/Secret
+   - Click "Authenticate" to enable progress updates
+
+**Note**: Each user provides their own OAuth credentials - no server-wide configuration needed!
 
 ### 4. Start the Server
 

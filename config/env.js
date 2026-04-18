@@ -57,6 +57,31 @@ const config = {
   malClientId: getEnvVar('MAL_CLIENT_ID', null),
 
   /**
+   * AniList OAuth Client ID (required for progress updates)
+   * Register an app at https://anilist.co/settings/developer to obtain one.
+   * @type {string|null}
+   */
+  anilistClientId: getEnvVar('ANILIST_CLIENT_ID', null),
+
+  /**
+   * AniList OAuth Client Secret (required for progress updates)
+   * @type {string|null}
+   */
+  anilistClientSecret: getEnvVar('ANILIST_CLIENT_SECRET', null),
+
+  /**
+   * MyAnimeList OAuth Client ID (required for progress updates)
+   * @type {string|null}
+   */
+  malOAuthClientId: getEnvVar('MAL_OAUTH_CLIENT_ID', null),
+
+  /**
+   * MyAnimeList OAuth Client Secret (required for progress updates)
+   * @type {string|null}
+   */
+  malOAuthClientSecret: getEnvVar('MAL_OAUTH_CLIENT_SECRET', null),
+
+  /**
    * Node environment (development, production, etc.)
    * @type {string}
    */
@@ -85,6 +110,8 @@ function validateConfig() {
   console.log(`  - Port: ${config.port}`);
   console.log(`  - Environment: ${config.nodeEnv}`);
   console.log(`  - MAL Client ID: ${config.malClientId ? 'set' : 'not set (MAL service disabled)'}`);
+  console.log(`  - AniList OAuth: ${config.anilistClientId && config.anilistClientSecret ? 'configured' : 'not configured (progress updates disabled)'}`);
+  console.log(`  - MAL OAuth: ${config.malOAuthClientId && config.malOAuthClientSecret ? 'configured' : 'not configured (progress updates disabled)'}`);
 }
 
 // Validate configuration on module load

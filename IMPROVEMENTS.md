@@ -4,11 +4,67 @@ This document outlines all the improvements made to the AniList Stremio Addon pr
 
 ## 📊 Overview
 
-**Date**: 2026-04-17  
-**Scope**: Complete project refactoring and documentation  
-**Impact**: Significantly improved code quality, maintainability, and developer experience
+**Date**: 2026-04-18  
+**Scope**: Implemented OAuth authentication and progress update functionality  
+**Impact**: Complete progress syncing between Stremio and external anime tracking services
 
 ## 🎯 Improvements Made
+
+### 6. OAuth Authentication System
+
+#### OAuth Configuration and Token Management
+- **Purpose**: Enable secure user authentication for progress updates
+- **Implementation**:
+  - Added OAuth constants for AniList and MyAnimeList endpoints
+  - Created token storage system with automatic expiration handling
+  - Implemented secure token persistence using JSON file storage
+  - Added environment variable validation for OAuth credentials
+
+**Key Features**:
+- Support for both AniList and MyAnimeList OAuth flows
+- Automatic token refresh and expiration handling
+- Secure token storage with user-specific keys
+- Graceful degradation when OAuth is not configured
+
+#### Authentication Routes and UI
+- **Purpose**: Provide user-friendly OAuth authentication flow
+- **Implementation**:
+  - Added OAuth authorization and callback routes
+  - Updated web interface with authentication buttons
+  - Implemented authentication status checking
+  - Added visual feedback for authentication state
+
+**Key Features**:
+- Seamless OAuth flow integration
+- Real-time authentication status updates
+- User-friendly authentication prompts
+- Automatic redirect handling
+
+#### Progress Update Implementation
+- **Purpose**: Enable automatic progress syncing when episodes are watched
+- **Implementation**:
+  - Updated `updateProgress` functions to use OAuth tokens
+  - Added proper API calls to AniList and MyAnimeList
+  - Implemented error handling for authentication failures
+  - Added comprehensive logging for debugging
+
+**Key Features**:
+- Real-time progress updates to external services
+- Support for both AniList GraphQL mutations and MAL REST API
+- Robust error handling and user feedback
+- Token validation and automatic retry logic
+
+**Technical Details**:
+- AniList: Uses GraphQL mutations with Bearer token authentication
+- MyAnimeList: Uses REST API PATCH requests with Bearer token authentication
+- Token storage: JSON file with automatic cleanup of expired tokens
+- Security: Tokens stored server-side, never exposed to client
+
+**Configuration Requirements**:
+- AniList OAuth app registration with proper redirect URIs
+- MyAnimeList OAuth app registration with proper redirect URIs
+- Environment variables for client IDs and secrets
+- HTTPS recommended for production OAuth flows
 
 ### 1. Configuration Management
 

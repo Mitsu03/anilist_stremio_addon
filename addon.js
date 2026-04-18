@@ -159,6 +159,76 @@ async function getMeta(type, id, username, service, malClientId) {
 }
 
 /**
+ * Handles stream requests from Stremio
+ * 
+ * This function processes requests for streaming information and handles
+ * progress updates when episodes are marked as watched.
+ * 
+ * @async
+ * @param {string} type - Content type (e.g., "anime", "movie")
+ * @param {string} id - Content identifier (e.g., "anilist:12345")
+ * @param {Object} videoInfo - Information about the video being watched
+ * @param {string} username - User's username
+ * @param {string} service - Service name ('anilist' or 'mal')
+ * @param {string} malClientId - MAL Client ID (for MAL service)
+ * @returns {Promise<Object>} Stream response object
+ * @returns {Array<Object>} return.streams - Array of stream objects
+ * 
+ * @throws {Error} If stream fetching fails
+ * 
+ * @example
+ * const stream = await getStream("anime", "anilist:12345", { season: 1, episode: 1 });
+ * // Returns: { streams: [{ url: "...", title: "..." }] }
+ */
+async function getStream(type, id, videoInfo, username, service, malClientId) {
+  try {
+    console.log(`Stream request - Service: ${service}, Type: ${type}, ID: ${id}, Video: ${JSON.stringify(videoInfo)}`);
+
+    if (type !== 'anime') {
+      throw new Error(`Unsupported content type: ${type}`);
+    }
+
+    // Extract anime ID from the content ID
+    let animeId;
+    if (service === 'mal') {
+      if (!id.startsWith('mal:')) {
+        return { streams: [] };
+      }
+      animeId = id.substring(4); // Remove 'mal:' prefix
+    } else {
+      // Default: AniList
+      if (!id.startsWith('anilist:')) {
+        return { streams: [] };
+      }
+      animeId = id.substring(8); // Remove 'anilist:' prefix
+    }
+
+    // Handle progress update if videoInfo contains episode information
+    if (videoInfo && videoInfo.episode) {
+      try {
+        if (service === 'mal') {
+          await malService.updateProgress(animeId, videoInfo.episode, username, malClientId);
+        } else {
+          await anilistService.updateProgress(animeId, videoInfo.episode, username);
+        }
+        console.log(`Updated progress for ${service} anime ${animeId}: episode ${videoInfo.episode}`);
+      } catch (progressError) {
+        console.error(`Failed to update progress for ${service} anime ${animeId}:`, progressError.message);
+        // Don't fail the stream request if progress update fails
+      }
+    }
+
+    // Return empty streams since this addon doesn't provide actual streaming
+    // The main purpose is progress tracking
+    return { streams: [] };
+
+  } catch (error) {
+    console.error(`Error in getStream (${type}/${id}):`, error.message);
+    throw new Error(`Failed to process stream request: ${error.message}`);
+  }
+}
+
+/**
  * Exported addon interface
  * 
  * This object provides the public API for the Stremio addon,
@@ -168,7 +238,8 @@ module.exports = {
   manifest,
   getManifest,
   getCatalog,
-  getMeta
+  getMeta,
+  getStream
 };
 
 // Made with Bob

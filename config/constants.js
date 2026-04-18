@@ -29,11 +29,11 @@ const DEFAULT_PORT = 3000;
  */
 const ADDON_MANIFEST = {
   id: 'community.anilist-stremio',
-  version: '1.3.0',
+  version: '1.5.0',
   name: 'AniList Sync',
-  description: 'Syncs your AniList Currently Watching anime to Stremio library',
+  description: 'Syncs your AniList Currently Watching anime to Stremio library with progress tracking',
   types: ['anime'],
-  resources: ['catalog', 'meta'],
+  resources: ['catalog', 'meta', 'stream'],
   contactEmail: 'contact@example.com'
 };
 
@@ -43,11 +43,11 @@ const ADDON_MANIFEST = {
  */
 const MAL_MANIFEST = {
   id: 'community.mal-stremio',
-  version: '1.3.0',
+  version: '1.4.0',
   name: 'MyAnimeList Sync',
-  description: 'Syncs your MyAnimeList Currently Watching anime to Stremio library',
+  description: 'Syncs your MyAnimeList Currently Watching anime to Stremio library with progress tracking',
   types: ['anime'],
-  resources: ['catalog', 'meta'],
+  resources: ['catalog', 'meta', 'stream'],
   contactEmail: 'contact@example.com'
 };
 
@@ -132,6 +132,26 @@ const HTTP_STATUS = {
   INTERNAL_SERVER_ERROR: 500
 };
 
+/**
+ * AniList OAuth configuration
+ * @constant {Object}
+ */
+const ANILIST_OAUTH = {
+  AUTH_URL: 'https://anilist.co/api/v2/oauth/authorize',
+  TOKEN_URL: 'https://anilist.co/api/v2/oauth/token',
+  SCOPES: ['read:lists', 'write:lists']
+};
+
+/**
+ * MyAnimeList OAuth configuration
+ * @constant {Object}
+ */
+const MAL_OAUTH = {
+  AUTH_URL: 'https://myanimelist.net/v1/oauth2/authorize',
+  TOKEN_URL: 'https://myanimelist.net/v1/oauth2/token',
+  SCOPES: ['read:users', 'write:users']
+};
+
 module.exports = {
   ANILIST_API_URL,
   MAL_API_URL,
@@ -143,7 +163,9 @@ module.exports = {
   MAL_CATALOGS,
   ANILIST_STATUS,
   POSTER_SHAPES,
-  HTTP_STATUS
+  HTTP_STATUS,
+  ANILIST_OAUTH,
+  MAL_OAUTH
 };
 
 // Made with Bob

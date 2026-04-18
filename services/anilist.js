@@ -9,6 +9,7 @@
 
 const axios = require('axios');
 const { ANILIST_API_URL, ANILIST_STATUS, POSTER_SHAPES } = require('../config/constants');
+const tokenManager = require('../config/tokens');
 
 /**
  * GraphQL query to fetch user's currently watching anime
@@ -253,9 +254,77 @@ async function getAnimeMeta(id) {
   }
 }
 
+/**
+ * Updates the user's progress for an anime on AniList
+ * 
+ * This function increments the progress (episodes watched) for a specific
+ * anime in the user's AniList. Requires authentication.
+ * 
+ * @async
+ * @param {string} animeId - AniList anime ID
+ * @param {number} episode - Episode number that was watched
+ * @param {string} username - User's AniList username
+ * @returns {Promise<void>}
+ * @throws {Error} If progress update fails
+ * 
+ * @example
+ * await updateProgress("12345", 5, "myusername");
+ */
+async function updateProgress(animeId, episode, username) {
+  try {
+    console.log(`Updating progress for AniList anime ${animeId}: episode ${episode} for user ${username}`);
+    
+    // Get user's access token
+    const tokens = tokenManager.getTokens('anilist', username);
+    if (!tokens) {
+      throw new Error('User not authenticated with AniList');
+    }
+    
+    const mutation = `
+      mutation ($mediaId: Int, $progress: Int) {
+        SaveMediaListEntry (mediaId: $mediaId, progress: $progress) {
+          id
+          progress
+          status
+        }
+      }
+    `;
+    
+    const response = await axios.post(
+      ANILIST_API_URL,
+      {
+        query: mutation,
+        variables: { 
+          mediaId: parseInt(animeId, 10), 
+          progress: episode 
+        }
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${tokens.access_token}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+    
+    if (response.data.errors) {
+      throw new Error(`AniList API error: ${response.data.errors[0].message}`);
+    }
+    
+    console.log(`Successfully updated AniList progress for anime ${animeId} to episode ${episode}`);
+    
+  } catch (error) {
+    console.error(`Error updating progress for anime ${animeId}:`, error.message);
+    throw new Error(`Failed to update progress: ${error.message}`);
+  }
+}
+
 module.exports = {
   getAnimeList,
-  getAnimeMeta
+  getAnimeMeta,
+  updateProgress
 };
 
 // Made with Bob

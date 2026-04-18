@@ -9,9 +9,11 @@
  */
 
 const express = require('express');
+const axios = require('axios');
 const addonInterface = require('./addon');
 const config = require('./config/env');
-const { HTTP_STATUS } = require('./config/constants');
+const { HTTP_STATUS, ANILIST_OAUTH, MAL_OAUTH } = require('./config/constants');
+const tokenManager = require('./config/tokens');
 
 // Initialize Express application
 const app = express();
@@ -52,6 +54,125 @@ function isValidUsername(username) {
 }
 
 const VALID_SERVICES = new Set(['anilist', 'mal']);
+
+/**
+ * GET /auth/:service/:username
+ *
+ * Initiates OAuth authentication flow for a user
+ */
+app.get('/auth/:service/:username', (req, res) => {
+  const { service, username } = req.params;
+  const { client_id, client_secret } = req.query;
+
+  if (!VALID_SERVICES.has(service)) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Unknown service. Use "anilist" or "mal".' });
+  }
+  if (!isValidUsername(username)) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid username' });
+  }
+
+  // Store user credentials if provided
+  if (client_id && client_secret) {
+    tokenManager.storeCredentials(service, username, { client_id, client_secret });
+  }
+
+  // Get stored credentials
+  const credentials = tokenManager.getCredentials(service, username);
+  if (!credentials) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ 
+      error: 'OAuth credentials not provided. Please provide client_id and client_secret as query parameters.' 
+    });
+  }
+
+  const host = req.headers.host || `localhost:${config.port}`;
+  const protocol = req.headers['x-forwarded-proto'] || 'http';
+  const baseUrl = `${protocol}://${host}`;
+  const redirectUri = `${baseUrl}/auth/${service}/${username}/callback`;
+
+  let authUrl;
+  const state = `${service}:${username}:${Date.now()}`;
+
+  if (service === 'anilist') {
+    authUrl = `${ANILIST_OAUTH.AUTH_URL}?client_id=${credentials.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=${state}`;
+  } else if (service === 'mal') {
+    authUrl = `${MAL_OAUTH.AUTH_URL}?response_type=code&client_id=${credentials.client_id}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
+  }
+
+  res.redirect(authUrl);
+});
+
+/**
+ * GET /auth/:service/:username/callback
+ *
+ * OAuth callback handler - exchanges authorization code for access token
+ */
+app.get('/auth/:service/:username/callback', async (req, res) => {
+  const { service, username } = req.params;
+  const { code, state, error } = req.query;
+
+  if (!VALID_SERVICES.has(service)) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).send('Unknown service');
+  }
+  if (!isValidUsername(username)) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).send('Invalid username');
+  }
+
+  if (error) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).send(`Authentication failed: ${error}`);
+  }
+
+  if (!code) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).send('No authorization code received');
+  }
+
+  try {
+    const host = req.headers.host || `localhost:${config.port}`;
+    const protocol = req.headers['x-forwarded-proto'] || 'http';
+    const baseUrl = `${protocol}://${host}`;
+    const redirectUri = `${baseUrl}/auth/${service}/${username}/callback`;
+
+    // Get stored credentials
+    const credentials = tokenManager.getCredentials(service, username);
+    if (!credentials) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).send('OAuth credentials not found');
+    }
+
+    let tokenResponse;
+    const tokenData = {
+      client_id: credentials.client_id,
+      client_secret: credentials.client_secret,
+      code,
+      grant_type: 'authorization_code',
+      redirect_uri: redirectUri
+    };
+
+    if (service === 'anilist') {
+      tokenResponse = await axios.post(ANILIST_OAUTH.TOKEN_URL, tokenData, {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } else if (service === 'mal') {
+      tokenResponse = await axios.post(MAL_OAUTH.TOKEN_URL, new URLSearchParams(tokenData), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      });
+    }
+
+    tokenManager.storeTokens(service, username, tokenResponse.data);
+
+    res.send(`
+      <html>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+          <h1>✅ Authentication Successful!</h1>
+          <p>You can now use progress updates for ${service === 'anilist' ? 'AniList' : 'MyAnimeList'}.</p>
+          <p><a href="${baseUrl}">Return to configuration page</a></p>
+        </body>
+      </html>
+    `);
+
+  } catch (error) {
+    console.error('OAuth callback error:', error.response?.data || error.message);
+    res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).send('Authentication failed');
+  }
+});
 
 /**
  * GET /
@@ -169,6 +290,20 @@ app.get('/', (req, res) => {
     button:hover, .stremio-btn:hover { opacity: 0.85; }
     .copy-btn { background: #2a2a2a; color: #e0e0e0; }
     .stremio-btn { background: #5b6af5; color: #fff; }
+    .auth-btn {
+      background: #4caf7d;
+      color: #fff;
+      padding: 0.6rem 1.2rem;
+      border-radius: 7px;
+      font-size: 0.88rem;
+      cursor: pointer;
+      border: none;
+      font-weight: 500;
+      transition: opacity 0.15s;
+    }
+    .auth-btn:hover { opacity: 0.85; }
+    .auth-status { color: #4caf7d; }
+    .auth-status.error { color: #e05555; }
     .copied { color: #4caf7d; font-size: 0.82rem; margin-top: 0.4rem; min-height: 1.1em; }
   </style>
 </head>
@@ -188,6 +323,18 @@ app.get('/', (req, res) => {
       <input type="text" id="al-username" placeholder="e.g. MyUsername"
              autocomplete="off" spellcheck="false" maxlength="20">
       <p class="hint" id="al-hint">Letters, numbers, hyphens and underscores (2&ndash;20 chars).</p>
+
+      <div class="credentials-section">
+        <label style="margin-top:1.5rem; display:block;">OAuth Credentials (for progress updates)</label>
+        <p style="font-size:0.9rem; color:#888; margin-bottom:0.5rem;">
+          Get these from <a href="https://anilist.co/settings/developer" target="_blank" rel="noopener">AniList Developer Settings</a>
+        </p>
+        <input type="text" id="al-client-id" placeholder="Client ID"
+               autocomplete="off" spellcheck="false">
+        <input type="password" id="al-client-secret" placeholder="Client Secret"
+               autocomplete="off" spellcheck="false" style="margin-top:0.5rem;">
+      </div>
+
       <div class="result" id="al-result">
         <label style="margin-top:1rem">Your install URL</label>
         <div class="url-box" id="al-url"></div>
@@ -196,6 +343,16 @@ app.get('/', (req, res) => {
           <a class="stremio-btn" id="al-stremio" href="#">Open in Stremio</a>
         </div>
         <p class="copied" id="al-copied"></p>
+      </div>
+      <div class="auth-section">
+        <label style="margin-top:1.5rem; display:block;">Progress Updates (Optional)</label>
+        <p style="font-size:0.9rem; color:#888; margin-bottom:0.5rem;">
+          Authenticate to enable automatic progress syncing when you watch episodes.
+        </p>
+        <button class="auth-btn" id="al-auth-btn" onclick="authenticate('anilist')" style="display:none;">
+          🔐 Authenticate with AniList
+        </button>
+        <div class="auth-status" id="al-auth-status" style="font-size:0.9rem; margin-top:0.5rem;"></div>
       </div>
     </div>
 
@@ -212,6 +369,18 @@ app.get('/', (req, res) => {
              autocomplete="off" spellcheck="false" maxlength="20"
              ${malConfigured ? '' : 'disabled'}>
       <p class="hint" id="mal-hint">Letters, numbers, hyphens and underscores (2&ndash;20 chars).</p>
+
+      <div class="credentials-section">
+        <label style="margin-top:1.5rem; display:block;">OAuth Credentials (for progress updates)</label>
+        <p style="font-size:0.9rem; color:#888; margin-bottom:0.5rem;">
+          Get these from <a href="https://myanimelist.net/apiconfig" target="_blank" rel="noopener">MAL API Config</a>
+        </p>
+        <input type="text" id="mal-client-id" placeholder="Client ID"
+               autocomplete="off" spellcheck="false" ${malConfigured ? '' : 'disabled'}>
+        <input type="password" id="mal-client-secret" placeholder="Client Secret"
+               autocomplete="off" spellcheck="false" style="margin-top:0.5rem;" ${malConfigured ? '' : 'disabled'}>
+      </div>
+
       <div class="result" id="mal-result">
         <label style="margin-top:1rem">Your install URL</label>
         <div class="url-box" id="mal-url"></div>
@@ -220,6 +389,16 @@ app.get('/', (req, res) => {
           <a class="stremio-btn" id="mal-stremio" href="#">Open in Stremio</a>
         </div>
         <p class="copied" id="mal-copied"></p>
+      </div>
+      <div class="auth-section">
+        <label style="margin-top:1.5rem; display:block;">Progress Updates (Optional)</label>
+        <p style="font-size:0.9rem; color:#888; margin-bottom:0.5rem;">
+          Authenticate to enable automatic progress syncing when you watch episodes.
+        </p>
+        <button class="auth-btn" id="mal-auth-btn" onclick="authenticate('mal')" style="display:none;">
+          🔐 Authenticate with MyAnimeList
+        </button>
+        <div class="auth-status" id="mal-auth-status" style="font-size:0.9rem; margin-top:0.5rem;"></div>
       </div>
     </div>
   </div>
@@ -270,11 +449,95 @@ app.get('/', (req, res) => {
         document.getElementById(urlId).textContent = manifestUrl;
         document.getElementById(stremioId).href = 'stremio://' + manifestUrl.replace(/^https?:\\/\\//, '');
         result.classList.add('visible');
+        checkAuthStatus(service, val);
       });
+    }
+
+    async function checkAuthStatus(service, username) {
+      if (!username) return;
+
+      const authBtn = document.getElementById(service + '-auth-btn');
+      const authStatus = document.getElementById(service + '-auth-status');
+      const clientId = document.getElementById(service + '-client-id').value.trim();
+      const clientSecret = document.getElementById(service + '-client-secret').value.trim();
+
+      // Show auth button if credentials are provided
+      if (clientId && clientSecret) {
+        authBtn.style.display = 'inline-block';
+      } else {
+        authBtn.style.display = 'none';
+        authStatus.textContent = 'Enter your OAuth credentials above to enable progress updates';
+        authStatus.classList.remove('error');
+        return;
+      }
+
+      try {
+        const response = await fetch(BASE + '/auth/' + service + '/' + username + '/status');
+        const data = await response.json();
+
+        if (data.authenticated) {
+          authBtn.style.display = 'none';
+          authStatus.textContent = '✅ Authenticated - Progress updates enabled';
+          authStatus.classList.remove('error');
+        } else {
+          authBtn.style.display = 'inline-block';
+          authStatus.textContent = '❌ Not authenticated - Click authenticate to enable progress updates';
+          authStatus.classList.add('error');
+        }
+      } catch (error) {
+        authBtn.style.display = 'inline-block';
+        authStatus.textContent = '❌ Unable to check authentication status';
+        authStatus.classList.add('error');
+      }
+    }
+
+    function authenticate(service) {
+      const username = document.getElementById(service + '-username').value.trim();
+      const clientId = document.getElementById(service + '-client-id').value.trim();
+      const clientSecret = document.getElementById(service + '-client-secret').value.trim();
+
+      if (!username) {
+        alert('Please enter your username first');
+        return;
+      }
+
+      if (!clientId || !clientSecret) {
+        alert('Please enter your OAuth Client ID and Client Secret');
+        return;
+      }
+
+      const params = new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret
+      });
+
+      window.location.href = BASE + '/auth/' + service + '/' + username + '?' + params.toString();
+    }
+
+    // Add listeners for credential inputs
+    function setupCredentialInputs(service) {
+      const clientIdInput = document.getElementById(service + '-client-id');
+      const clientSecretInput = document.getElementById(service + '-client-secret');
+
+      if (clientIdInput) {
+        clientIdInput.addEventListener('input', () => {
+          const username = document.getElementById(service + '-username').value.trim();
+          if (username) checkAuthStatus(service, username);
+        });
+      }
+
+      if (clientSecretInput) {
+        clientSecretInput.addEventListener('input', () => {
+          const username = document.getElementById(service + '-username').value.trim();
+          if (username) checkAuthStatus(service, username);
+        });
+      }
     }
 
     setupInput('al-username',  'al-hint',  'al-result',  'al-url',  'al-stremio',  'anilist');
     setupInput('mal-username', 'mal-hint', 'mal-result', 'mal-url', 'mal-stremio', 'mal');
+    setupCredentialInputs('anilist');
+    setupCredentialInputs('mal');
 
     function copyUrl(urlId) {
       const url = document.getElementById(urlId).textContent;
@@ -288,6 +551,25 @@ app.get('/', (req, res) => {
   </script>
 </body>
 </html>`);
+});
+
+/**
+ * GET /auth/:service/:username/status
+ *
+ * Check authentication status for a user
+ */
+app.get('/auth/:service/:username/status', (req, res) => {
+  const { service, username } = req.params;
+
+  if (!VALID_SERVICES.has(service)) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Unknown service' });
+  }
+  if (!isValidUsername(username)) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid username' });
+  }
+
+  const authenticated = tokenManager.hasValidTokens(service, username);
+  res.json({ authenticated });
 });
 
 /**
@@ -367,6 +649,36 @@ app.get('/:service/:username/meta/:type/:id.json', async (req, res) => {
       ? HTTP_STATUS.NOT_FOUND
       : HTTP_STATUS.INTERNAL_SERVER_ERROR;
     res.status(statusCode).json({ error: error.message || 'Failed to fetch metadata' });
+  }
+});
+
+/**
+ * GET /:service/:username/stream/:type/:id.json
+ */
+app.get('/:service/:username/stream/:type/:id.json', async (req, res) => {
+  const { service, username, type, id } = req.params;
+  const { season, episode } = req.query;
+
+  if (!VALID_SERVICES.has(service)) {
+    return res.status(HTTP_STATUS.NOT_FOUND).json({ error: 'Unknown service. Use "anilist" or "mal".' });
+  }
+  if (!isValidUsername(username)) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid username' });
+  }
+  if (service === 'mal' && !config.malClientId) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'MAL service is not configured on this server (missing MAL_CLIENT_ID).' });
+  }
+
+  try {
+    const videoInfo = {};
+    if (season) videoInfo.season = parseInt(season, 10);
+    if (episode) videoInfo.episode = parseInt(episode, 10);
+
+    const stream = await addonInterface.getStream(type, id, videoInfo, username, service, config.malClientId);
+    res.json(stream);
+  } catch (error) {
+    console.error('Stream error:', error.message);
+    res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({ error: error.message || 'Failed to process stream request' });
   }
 });
 
