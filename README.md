@@ -1,6 +1,6 @@
 # Anime Stremio Addon
 
-A self-hosted Stremio addon that syncs your anime watch lists from **AniList**, **MyAnimeList**, and **IMDB** directly into Stremio, with automatic episode progress updates.
+A self-hosted Stremio addon that syncs your watch lists from **AniList**, **MyAnimeList**, **IMDB**, and **Letterboxd** directly into Stremio, with automatic episode progress updates for AniList/MAL.
 
 ## 📋 Table of Contents
 
@@ -16,7 +16,7 @@ A self-hosted Stremio addon that syncs your anime watch lists from **AniList**, 
 
 ## ✨ Features
 
-- **Multi-service support**: AniList, MyAnimeList, and IMDB in one addon
+- **Multi-service support**: AniList, MyAnimeList, IMDB, and Letterboxd in one addon
 - **All watch statuses**: Currently Watching, On Hold, Plan to Watch, Dropped, Completed, Rewatching
 - **Rich metadata**: Poster images, descriptions, genre tags, ratings, release year, watch progress
 - **Automatic progress sync**: After watching an episode for 5+ minutes in Stremio, your progress is updated on AniList or MAL automatically
@@ -85,6 +85,9 @@ All configuration is done via environment variables in `.env`.
 | `ANILIST_CLIENT_SECRET` | No* | — | AniList OAuth Client Secret |
 | `MAL_CLIENT_ID` | No* | — | MAL API Client ID (enables MAL service) |
 | `MAL_CLIENT_SECRET` | No* | — | MAL OAuth Client Secret (enables progress sync) |
+| `LETTERBOXD_CLIENT_ID` | No* | — | Letterboxd OAuth Client ID |
+| `LETTERBOXD_CLIENT_SECRET` | No* | — | Letterboxd OAuth Client Secret |
+| `LETTERBOXD_GRANT_TYPE` | No | `client_credentials` | App-level grant type for Letterboxd token requests |
 
 \* Required only if you want to use that service.
 
@@ -127,9 +130,15 @@ systemctl restart anilist-stremio
 2. For **AniList**: click **Login with AniList** → authorise → your addon URL is shown automatically
 3. For **MyAnimeList**: click **Connect to MyAnimeList** → authorise → your addon URL is shown automatically
 4. For **IMDB**: enter your IMDB User ID (e.g. `ur12345678`) found in your [IMDB profile URL](https://www.imdb.com/user/)
-5. Copy the URL or click **Open in Stremio** to install directly
+5. For **Letterboxd**: enter your Letterboxd username and password, then click **Login with Letterboxd**
+6. Copy the URL or click **Open in Stremio** to install directly
 
 If you use more than one service, an **Install in Stremio** button appears at the bottom to install all of them as a single combined addon.
+
+Letterboxd exposes two catalog filters:
+
+- Watchlist
+- Watched
 
 ### Episode Progress Sync
 

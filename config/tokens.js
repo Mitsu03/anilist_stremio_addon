@@ -103,13 +103,18 @@ function getTokens(service, username) {
   if (Date.now() >= userTokens.expires_at) {
     console.log(`Tokens expired for ${service} user: ${username}`);
     delete tokens[userKey].access_token;
-    delete tokens[userKey].refresh_token;
     delete tokens[userKey].expires_at;
     saveTokens(tokens);
     return null;
   }
 
   return userTokens;
+}
+
+function getTokenRecord(service, username) {
+  const tokens = loadTokens();
+  const userKey = getUserKey(service, username);
+  return tokens[userKey] || null;
 }
 
 /**
@@ -137,22 +142,31 @@ function hasValidTokens(service, username) {
 // Persisted to tokens.json so addon URLs survive server restarts.
 // ---------------------------------------------------------------------------
 
-function storeOpaqueToken(opaqueToken, username) {
+function storeServiceOpaqueToken(service, opaqueToken, username) {
   const tokens = loadTokens();
-  tokens[`mal_link:${opaqueToken}`] = username.toLowerCase();
+  tokens[`${service}_link:${opaqueToken}`] = username.toLowerCase();
   saveTokens(tokens);
-  console.log(`Stored opaque MAL token for user: ${username}`);
+  console.log(`Stored opaque ${service.toUpperCase()} token for user: ${username}`);
+}
+
+function resolveServiceOpaqueToken(service, opaqueToken) {
+  const tokens = loadTokens();
+  return tokens[`${service}_link:${opaqueToken}`] || null;
+}
+
+function hasValidTokensByOpaqueToken(service, opaqueToken) {
+  const username = resolveServiceOpaqueToken(service, opaqueToken);
+  if (!username) return false;
+  return hasValidTokens(service, username);
+}
+
+// Backwards-compatible MAL wrappers
+function storeOpaqueToken(opaqueToken, username) {
+  return storeServiceOpaqueToken('mal', opaqueToken, username);
 }
 
 function resolveOpaqueToken(opaqueToken) {
-  const tokens = loadTokens();
-  return tokens[`mal_link:${opaqueToken}`] || null;
-}
-
-function hasValidTokensByOpaqueToken(opaqueToken) {
-  const username = resolveOpaqueToken(opaqueToken);
-  if (!username) return false;
-  return hasValidTokens('mal', username);
+  return resolveServiceOpaqueToken('mal', opaqueToken);
 }
 
 // In-memory PKCE verifier store (ephemeral, keyed by random session ID)
@@ -239,6 +253,7 @@ function cleanupOldSessions(service, token) {
 module.exports = {
   storeTokens,
   getTokens,
+  getTokenRecord,
   removeTokens,
   hasValidTokens,
   getUserKey,
@@ -251,6 +266,8 @@ module.exports = {
   markProgressUpdated,
   updateWatchSessionAccess,
   cleanupOldSessions,
+  storeServiceOpaqueToken,
+  resolveServiceOpaqueToken,
   storeOpaqueToken,
   resolveOpaqueToken,
   hasValidTokensByOpaqueToken

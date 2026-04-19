@@ -11,7 +11,8 @@
 const anilistService = require('./services/anilist');
 const malService = require('./services/mal');
 const imdbService = require('./services/imdb');
-const { ADDON_MANIFEST, MAL_MANIFEST, IMDB_MANIFEST, ANILIST_CATALOGS, MAL_CATALOGS, IMDB_CATALOGS } = require('./config/constants');
+const letterboxdService = require('./services/letterboxd');
+const { ADDON_MANIFEST, MAL_MANIFEST, IMDB_MANIFEST, LETTERBOXD_MANIFEST, ANILIST_CATALOGS, MAL_CATALOGS, IMDB_CATALOGS, LETTERBOXD_CATALOGS } = require('./config/constants');
 
 // Maps the genre filter label to each service's status value
 const ANILIST_STATUS_MAP = {
@@ -32,6 +33,11 @@ const MAL_STATUS_MAP = {
   'Rewatching':         'rewatching'
 };
 
+const LETTERBOXD_STATUS_MAP = {
+  'Watchlist': 'Watchlist',
+  'Watched': 'Watched'
+};
+
 /**
  * Returns the Stremio manifest for a given service.
  *
@@ -44,6 +50,9 @@ function getManifest(service) {
   }
   if (service === 'imdb') {
     return { ...IMDB_MANIFEST, catalogs: IMDB_CATALOGS };
+  }
+  if (service === 'letterboxd') {
+    return { ...LETTERBOXD_MANIFEST, catalogs: LETTERBOXD_CATALOGS };
   }
   return { ...ADDON_MANIFEST, catalogs: ANILIST_CATALOGS };
 }
@@ -73,7 +82,7 @@ function getCombinedManifest(serviceConfig) {
     id: 'community.combined-stremio',
     version: '1.0.0',
     name: 'Combined Anime & Watchlist',
-    description: 'AniList, MAL, and IMDB in one addon',
+    description: 'AniList, MAL, IMDB, and Letterboxd in one addon',
     types: [...types],
     resources: [...resources],
     idPrefixes: [...idPrefixes],
@@ -104,7 +113,7 @@ const manifest = getManifest('anilist');
  * const catalog = await getCatalog("anime", "anilist.watching");
  * // Returns: { metas: [{ id: "anilist:12345", name: "...", ... }] }
  */
-async function getCatalog(type, id, extra, username, service, malClientId) {
+async function getCatalog(type, id, extra, username, service, malClientId, letterboxdClientId, letterboxdClientSecret) {
   try {
     console.log(`Catalog request - Service: ${service}, Type: ${type}, ID: ${id}, Extra: ${extra || 'none'}, User: ${username}`);
 
@@ -143,6 +152,13 @@ async function getCatalog(type, id, extra, username, service, malClientId) {
       return { metas };
     }
 
+    if (service === 'letterboxd' && id === 'letterboxd.list') {
+      const letterboxdStatus = LETTERBOXD_STATUS_MAP[genreFilter] || 'Watchlist';
+      const metas = await letterboxdService.getCatalog(username, letterboxdStatus, letterboxdClientId, letterboxdClientSecret);
+      console.log(`Returning ${metas.length} items for Letterboxd catalog [${letterboxdStatus}]`);
+      return { metas };
+    }
+
     console.warn(`Unknown catalog ID: ${id}`);
     return { metas: [] };
 
@@ -175,7 +191,7 @@ async function getMeta(type, id, username, service, malClientId) {
   try {
     console.log(`Meta request - Service: ${service}, Type: ${type}, ID: ${id}`);
 
-    if (type !== 'anime' && type !== 'series') {
+    if (type !== 'anime' && type !== 'series' && type !== 'movie') {
       throw new Error(`Unsupported content type: ${type}`);
     }
 
@@ -191,6 +207,11 @@ async function getMeta(type, id, username, service, malClientId) {
       // Stremio natively handles tt* ID metadata
       const meta = await imdbService.getTitleMeta(id);
       return { meta };
+    }
+
+    if (service === 'letterboxd') {
+      // Stremio can resolve tt* metadata natively for movie IDs.
+      return { meta: null };
     }
 
     // Default: AniList
