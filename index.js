@@ -27,9 +27,9 @@ function isValidAniListToken(token) {
   return typeof token === 'string' && token.length >= 10 && token.length <= 2048 && !/[<>"'\n\r]/.test(token);
 }
 
-// MAL: username (2-20 alphanumeric/dash/underscore)
-function isValidUsername(val) {
-  return typeof val === 'string' && /^[a-zA-Z0-9_-]{2,20}$/.test(val);
+// MAL: 64-char lowercase hex opaque token issued by this server after OAuth
+function isValidMalToken(val) {
+  return typeof val === 'string' && /^[a-f0-9]{64}$/.test(val);
 }
 
 // IMDB: user ID starts with "ur" + digits, or "p." + alphanumeric
@@ -39,9 +39,16 @@ function isValidImdbUserId(val) {
 
 function isValidServiceParam(service, param) {
   if (service === 'anilist') return isValidAniListToken(param);
-  if (service === 'mal') return isValidUsername(param);
+  if (service === 'mal') return isValidMalToken(param);
   if (service === 'imdb') return isValidImdbUserId(param);
   return false;
+}
+
+// For MAL routes: resolve the opaque addon token to the stored username.
+// For all other services the param is already the user-facing identifier.
+function resolveServiceToken(service, token) {
+  if (service !== 'mal') return token;
+  return tokenManager.resolveOpaqueToken(token);
 }
 
 const VALID_SERVICES = new Set(['anilist', 'mal', 'imdb']);
@@ -148,7 +155,7 @@ function configurePageHandler(req, res) {
         <button class="btn btn-login" onclick="malConnect()">&#x1F511;&nbsp; Connect to MyAnimeList</button>
       </div>
       <div id="mal-post" style="display:none">
-        <input type="hidden" id="mal-username" value="">
+        <input type="hidden" id="mal-token" value="">
         <p class="hint" id="mal-auth-status" style="margin-top:.25rem"></p>
         <button class="btn-switch" onclick="malReset()">Switch account</button>
       </div>
@@ -192,10 +199,10 @@ function configurePageHandler(req, res) {
         history.replaceState(null, '', window.location.pathname);
         showAlResult(decodeURIComponent(alToken));
       }
-      var malUser = params.get('mal_username');
-      if (malUser) {
+      var malToken = params.get('mal_token');
+      if (malToken && /^[a-f0-9]{64}$/.test(malToken)) {
         history.replaceState(null, '', window.location.pathname);
-        showMalResult(decodeURIComponent(malUser));
+        showMalResult(malToken);
       }
     })();
 
@@ -231,8 +238,8 @@ function configurePageHandler(req, res) {
       window.location.href = BASE + '/auth/mal/connect';
     }
 
-    function showMalResult(username) {
-      document.getElementById('mal-username').value = username;
+    function showMalResult(token) {
+      document.getElementById('mal-token').value = token;
       document.getElementById('mal-pre').style.display = 'none';
       document.getElementById('mal-post').style.display = 'block';
       var cb = document.getElementById('mal-include');
@@ -241,7 +248,7 @@ function configurePageHandler(req, res) {
       wrap.classList.add('enabled');
       document.getElementById('mal-status').classList.add('show');
       // Check auth status
-      fetch(BASE + '/auth/mal/' + encodeURIComponent(username) + '/status')
+      fetch(BASE + '/auth/mal/' + token + '/status')
         .then(function(r) { return r.json(); })
         .then(function(data) {
           var statusEl = document.getElementById('mal-auth-status');
@@ -250,13 +257,13 @@ function configurePageHandler(req, res) {
           }
         })
         .catch(function() {});
-      try { localStorage.setItem('mal-username', username); } catch(e) {}
+      try { localStorage.setItem('mal-token', token); } catch(e) {}
       updateInstallAll();
     }
 
     function malReset() {
       document.getElementById('mal-post').style.display = 'none';
-      document.getElementById('mal-username').value = '';
+      document.getElementById('mal-token').value = '';
       document.getElementById('mal-auth-status').textContent = '';
       document.getElementById('mal-pre').style.display = 'block';
       var cb = document.getElementById('mal-include');
@@ -264,7 +271,7 @@ function configurePageHandler(req, res) {
       cb.disabled = true; cb.checked = false;
       wrap.classList.remove('enabled');
       document.getElementById('mal-status').classList.remove('show');
-      try { localStorage.removeItem('mal-username'); } catch(e) {}
+      try { localStorage.removeItem('mal-token'); } catch(e) {}
       updateInstallAll();
     }
 
@@ -272,8 +279,8 @@ function configurePageHandler(req, res) {
     (function() {
       if (document.getElementById('mal-post').style.display !== 'none') return;
       try {
-        var saved = localStorage.getItem('mal-username');
-        if (saved) showMalResult(saved);
+        var saved = localStorage.getItem('mal-token');
+        if (saved && /^[a-f0-9]{64}$/.test(saved)) showMalResult(saved);
       } catch(e) {}
     })();
 
@@ -345,9 +352,9 @@ function configurePageHandler(req, res) {
         if (alMatch) cfg.anilist = decodeURIComponent(alMatch[1]);
       }
       var malCb = document.getElementById('mal-include');
-      var malInput = document.getElementById('mal-username');
-      if (malCb && malCb.checked && malInput && malInput.value.trim() && /^[a-zA-Z0-9_-]{2,20}$/.test(malInput.value.trim())) {
-        cfg.mal = malInput.value.trim();
+      var malToken = document.getElementById('mal-token');
+      if (malCb && malCb.checked && malToken && /^[a-f0-9]{64}$/.test(malToken.value)) {
+        cfg.mal = malToken.value;
       }
       var imdbCb = document.getElementById('imdb-include');
       var imdbInput = document.getElementById('imdb-userid');
@@ -489,8 +496,12 @@ app.get('/auth/mal/callback', async (req, res) => {
 
     tokenManager.storeTokens('mal', username, data);
 
-    // Redirect back to configure page with username in hash (same pattern as AniList)
-    res.redirect(`${protocol}://${host}/configure#mal_username=${encodeURIComponent(username)}`);
+    // Issue a random opaque token for use in the addon URL — never expose the username
+    const opaqueToken = crypto.randomBytes(32).toString('hex');
+    tokenManager.storeOpaqueToken(opaqueToken, username);
+
+    // Redirect back to configure page with the opaque token in the hash
+    res.redirect(`${protocol}://${host}/configure#mal_token=${opaqueToken}`);
   } catch (err) {
     const detail = err.response?.data ? JSON.stringify(err.response.data, null, 2) : err.message;
     console.error('MAL OAuth callback error:', detail);
@@ -498,11 +509,11 @@ app.get('/auth/mal/callback', async (req, res) => {
   }
 });
 
-// Check if a MAL user has valid stored tokens
-app.get('/auth/mal/:username/status', (req, res) => {
-  const { username } = req.params;
-  if (!isValidUsername(username)) return res.status(400).json({ error: 'Invalid username' });
-  res.json({ authenticated: tokenManager.hasValidTokens('mal', username) });
+// Check if a MAL opaque token is still authenticated
+app.get('/auth/mal/:token/status', (req, res) => {
+  const { token } = req.params;
+  if (!isValidMalToken(token)) return res.status(400).json({ error: 'Invalid token' });
+  res.json({ authenticated: tokenManager.hasValidTokensByOpaqueToken(token) });
 });
 
 // Exchange authorization code for token, return token to browser via URL hash
@@ -578,7 +589,9 @@ app.get('/combined/:config/catalog/:type/:id/:extra?.json', async (req, res) => 
   const service = serviceForCatalogId(id);
   if (!service || !svcConfig[service]) return res.status(HTTP_STATUS.NOT_FOUND).json({ error: 'Service not configured.' });
   try {
-    const catalog = await addonInterface.getCatalog(type, id, extra, svcConfig[service], service, config.malClientId);
+    const userParam = resolveServiceToken(service, svcConfig[service]);
+    if (service === 'mal' && !userParam) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: 'Invalid or expired MAL token.' });
+    const catalog = await addonInterface.getCatalog(type, id, extra, userParam, service, config.malClientId);
     res.json(catalog);
   } catch (error) {
     console.error('Combined catalog error:', error.message);
@@ -600,7 +613,9 @@ app.get('/combined/:config/meta/:type/:id.json', async (req, res) => {
   const token = svcConfig[service];
   if (!token) return res.json({ meta: null });
   try {
-    const meta = await addonInterface.getMeta(type, id, token, service, config.malClientId);
+    const userParam = resolveServiceToken(service, token);
+    if (service === 'mal' && !userParam) return res.json({ meta: null });
+    const meta = await addonInterface.getMeta(type, id, userParam, service, config.malClientId);
     res.json(meta);
   } catch (error) {
     console.error('Combined meta error:', error.message);
@@ -634,7 +649,9 @@ app.get('/combined/:config/stream/:type/:id.json', async (req, res) => {
     }
   }
   try {
-    const stream = await addonInterface.getStream(type, id, videoInfo, token, service, config.malClientId);
+    const userParam = resolveServiceToken(service, token);
+    if (service === 'mal' && !userParam) return res.json({ streams: [] });
+    const stream = await addonInterface.getStream(type, id, videoInfo, userParam, service, config.malClientId);
     res.json(stream);
   } catch (error) {
     console.error('Combined stream error:', error.message);
@@ -647,6 +664,7 @@ app.get('/:service/:token/manifest.json', (req, res) => {
   if (!VALID_SERVICES.has(service)) return res.status(HTTP_STATUS.NOT_FOUND).json({ error: 'Unknown service.' });
   if (!isValidServiceParam(service, token)) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid identifier.' });
   if (service === 'mal' && !config.malClientId) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'MAL not configured on this server (missing MAL_CLIENT_ID).' });
+  if (service === 'mal' && !resolveServiceToken('mal', token)) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: 'Invalid or expired MAL token.' });
   try {
     res.json(addonInterface.getManifest(service));
   } catch (error) {
@@ -661,7 +679,9 @@ app.get('/:service/:token/catalog/:type/:id/:extra?.json', async (req, res) => {
   if (!isValidServiceParam(service, token)) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid identifier.' });
   if (service === 'mal' && !config.malClientId) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'MAL not configured on this server (missing MAL_CLIENT_ID).' });
   try {
-    const catalog = await addonInterface.getCatalog(type, id, extra, token, service, config.malClientId);
+    const userParam = resolveServiceToken(service, token);
+    if (service === 'mal' && !userParam) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: 'Invalid or expired MAL token.' });
+    const catalog = await addonInterface.getCatalog(type, id, extra, userParam, service, config.malClientId);
     res.json(catalog);
   } catch (error) {
     console.error('Catalog error:', error.message);
@@ -675,7 +695,9 @@ app.get('/:service/:token/meta/:type/:id.json', async (req, res) => {
   if (!isValidServiceParam(service, token)) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid identifier.' });
   if (service === 'mal' && !config.malClientId) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'MAL not configured on this server (missing MAL_CLIENT_ID).' });
   try {
-    const meta = await addonInterface.getMeta(type, id, token, service, config.malClientId);
+    const userParam = resolveServiceToken(service, token);
+    if (service === 'mal' && !userParam) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: 'Invalid or expired MAL token.' });
+    const meta = await addonInterface.getMeta(type, id, userParam, service, config.malClientId);
     res.json(meta);
   } catch (error) {
     console.error('Meta error:', error.message);
@@ -720,7 +742,9 @@ app.get('/:service/:token/stream/:type/:id.json', async (req, res) => {
       console.log(`No episode info found for stream request: ${id}`);
     }
 
-    const stream = await addonInterface.getStream(type, id, videoInfo, token, service, config.malClientId);
+    const userParam = resolveServiceToken(service, token);
+    if (service === 'mal' && !userParam) return res.json({ streams: [] });
+    const stream = await addonInterface.getStream(type, id, videoInfo, userParam, service, config.malClientId);
     res.json(stream);
   } catch (error) {
     console.error('Stream error:', error.message);
