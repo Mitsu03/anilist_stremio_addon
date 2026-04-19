@@ -85,7 +85,25 @@ const config = {
    * MAL Client Secret (for OAuth progress updates)
    * @type {string|null}
    */
-  malClientSecret: getEnvVar('MAL_CLIENT_SECRET', null)
+  malClientSecret: getEnvVar('MAL_CLIENT_SECRET', null),
+
+  /**
+   * Letterboxd OAuth Client ID
+   * @type {string|null}
+   */
+  letterboxdClientId: getEnvVar('LETTERBOXD_CLIENT_ID', null),
+
+  /**
+   * Letterboxd OAuth Client Secret
+   * @type {string|null}
+   */
+  letterboxdClientSecret: getEnvVar('LETTERBOXD_CLIENT_SECRET', null),
+
+  /**
+   * Letterboxd grant type for app-level API access
+   * @type {string}
+   */
+  letterboxdGrantType: getEnvVar('LETTERBOXD_GRANT_TYPE', 'client_credentials')
 };
 
 /**
@@ -106,6 +124,7 @@ function validateConfig() {
   console.log(`  - MAL Client ID: ${config.malClientId ? 'set' : 'not set (MAL service disabled)'}`);
   console.log(`  - AniList OAuth: ${config.anilistClientId ? 'configured' : 'not configured (no ANILIST_CLIENT_ID)'}`);
   console.log(`  - MAL OAuth: ${config.malClientSecret ? 'configured' : 'not configured (progress updates disabled)'}`);
+  console.log(`  - Letterboxd OAuth: ${config.letterboxdClientId && config.letterboxdClientSecret ? 'configured' : 'not configured (Letterboxd service disabled)'}`);
 }
 
 // Validate configuration on module load

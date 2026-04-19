@@ -18,6 +18,24 @@ const ANILIST_API_URL = 'https://graphql.anilist.co';
 const MAL_API_URL = 'https://api.myanimelist.net/v2';
 
 /**
+ * Letterboxd REST API v0 base URL
+ * @constant {string}
+ */
+const LETTERBOXD_API_URL = 'https://api.letterboxd.com/api/v0';
+
+/**
+ * Letterboxd OAuth token endpoint
+ * @constant {string}
+ */
+const LETTERBOXD_TOKEN_URL = 'https://api.letterboxd.com/api/v0/auth/token';
+
+/**
+ * Required Letterboxd API user-agent
+ * @constant {string}
+ */
+const LETTERBOXD_USER_AGENT = 'Letterboxd Android 3.5.0 (491)';
+
+/**
  * Default port for the Express server
  * @constant {number}
  */
@@ -112,6 +130,21 @@ const IMDB_MANIFEST = {
   contactEmail: 'contact@example.com'
 };
 
+/**
+ * Stremio addon manifest for Letterboxd
+ * @constant {Object}
+ */
+const LETTERBOXD_MANIFEST = {
+  id: 'community.letterboxd-stremio',
+  version: '1.0.0',
+  name: 'Letterboxd Sync',
+  description: 'Syncs your Letterboxd watchlist and watched films to Stremio library',
+  types: ['movie'],
+  resources: ['catalog'],
+  idPrefixes: ['tt', 'letterboxd:'],
+  contactEmail: 'contact@example.com'
+};
+
 const IMDB_CATALOGS = [
   {
     type: 'movie',
@@ -122,6 +155,22 @@ const IMDB_CATALOGS = [
     type: 'series',
     id: 'imdb.watchlist',
     name: 'IMDB Watchlist'
+  }
+];
+
+const LETTERBOXD_STATUS_OPTIONS = [
+  'Watchlist',
+  'Watched'
+];
+
+const LETTERBOXD_CATALOGS = [
+  {
+    type: 'movie',
+    id: 'letterboxd.list',
+    name: 'Letterboxd',
+    extra: [
+      { name: 'genre', options: LETTERBOXD_STATUS_OPTIONS, isRequired: true }
+    ]
   }
 ];
 
@@ -187,15 +236,20 @@ module.exports = {
   ADDON_MANIFEST,
   MAL_MANIFEST,
   IMDB_MANIFEST,
+  LETTERBOXD_MANIFEST,
   CATALOGS,
   ANILIST_CATALOGS,
   MAL_CATALOGS,
   IMDB_CATALOGS,
+  LETTERBOXD_CATALOGS,
   ANILIST_STATUS,
   POSTER_SHAPES,
   HTTP_STATUS,
   ANILIST_OAUTH,
-  MAL_OAUTH
+  MAL_OAUTH,
+  LETTERBOXD_API_URL,
+  LETTERBOXD_TOKEN_URL,
+  LETTERBOXD_USER_AGENT
 };
 
 // Made with Bob

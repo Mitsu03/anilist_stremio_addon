@@ -10,10 +10,13 @@ const app = express();
 
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
   next();
 });
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 if (config.isDevelopment) {
   app.use((req, res, next) => {
@@ -37,21 +40,28 @@ function isValidImdbUserId(val) {
   return typeof val === 'string' && /^(ur\d{4,15}|p\.[a-z0-9]{10,50})$/.test(val);
 }
 
+// Letterboxd: 64-char lowercase hex opaque token issued by this server after password login
+function isValidLetterboxdToken(val) {
+  return typeof val === 'string' && /^[a-f0-9]{64}$/.test(val);
+}
+
 function isValidServiceParam(service, param) {
   if (service === 'anilist') return isValidAniListToken(param);
   if (service === 'mal') return isValidMalToken(param);
   if (service === 'imdb') return isValidImdbUserId(param);
+  if (service === 'letterboxd') return isValidLetterboxdToken(param);
   return false;
 }
 
 // For MAL routes: resolve the opaque addon token to the stored username.
 // For all other services the param is already the user-facing identifier.
 function resolveServiceToken(service, token) {
-  if (service !== 'mal') return token;
-  return tokenManager.resolveOpaqueToken(token);
+  if (service === 'mal') return tokenManager.resolveServiceOpaqueToken('mal', token);
+  if (service === 'letterboxd') return tokenManager.resolveServiceOpaqueToken('letterboxd', token);
+  return token;
 }
 
-const VALID_SERVICES = new Set(['anilist', 'mal', 'imdb']);
+const VALID_SERVICES = new Set(['anilist', 'mal', 'imdb', 'letterboxd']);
 
 function configurePageHandler(req, res) {
   const host = req.headers.host || ('localhost:' + config.port);
@@ -59,6 +69,7 @@ function configurePageHandler(req, res) {
   const baseUrl = protocol + '://' + host;
   const anilistOk = !!config.anilistClientId;
   const malOauthOk = !!(config.malClientId && config.malClientSecret);
+  const letterboxdOk = !!(config.letterboxdClientId && config.letterboxdClientSecret);
 
   res.setHeader('Content-Type', 'text/html');
   res.send(`<!DOCTYPE html>
@@ -179,6 +190,32 @@ function configurePageHandler(req, res) {
       </div>
     </div>
 
+    <!-- Letterboxd section -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title"><span class="section-badge" style="background:linear-gradient(135deg,#16a34a,#166534)">L</span> Letterboxd</div>
+        <label class="svc-checkbox-wrap" id="lb-cb-wrap" title="Include Letterboxd in install">
+          <input type="checkbox" id="lb-include" disabled onchange="updateInstallAll()">
+          <span class="svc-checkbox-label">Include</span>
+          <span class="svc-status" id="lb-status">&#x2713; Connected</span>
+        </label>
+      </div>
+      ${!letterboxdOk ? '<div class="warn">Letterboxd support requires <strong>LETTERBOXD_CLIENT_ID</strong> and <strong>LETTERBOXD_CLIENT_SECRET</strong> in .env.</div>' : ''}
+      <div id="lb-pre"${!letterboxdOk ? ' style="display:none"' : ''}>
+        <label class="field-label" for="lb-username">Letterboxd Username</label>
+        <input type="text" id="lb-username" placeholder="your_username" autocomplete="username" spellcheck="false" maxlength="40">
+        <label class="field-label" for="lb-password" style="margin-top:.8rem">Letterboxd Password</label>
+        <input type="password" id="lb-password" placeholder="Your password" autocomplete="current-password" maxlength="120">
+        <button class="btn btn-login" onclick="lbLogin()" style="margin-top:.9rem;width:100%;justify-content:center">&#x1F511;&nbsp; Login with Letterboxd</button>
+        <p class="hint" id="lb-hint">Uses Letterboxd password grant to create your addon token.</p>
+      </div>
+      <div id="lb-post" style="display:none">
+        <input type="hidden" id="lb-token" value="">
+        <p class="hint" id="lb-auth-status" style="margin-top:.25rem"></p>
+        <button class="btn-switch" onclick="lbReset()">Switch account</button>
+      </div>
+    </div>
+
     <!-- Install All section -->
     <div class="section" id="install-all-section">
       <a class="btn btn-stremio" id="install-all-btn" href="#" style="width:100%;justify-content:center;padding:.85rem;font-size:1rem;border-radius:10px;text-decoration:none;pointer-events:none;opacity:.4">&#x25B6;&nbsp; Install in Stremio</a>
@@ -275,12 +312,108 @@ function configurePageHandler(req, res) {
       updateInstallAll();
     }
 
+    function lbLogin() {
+      var username = (document.getElementById('lb-username').value || '').trim();
+      var password = document.getElementById('lb-password').value || '';
+      var hint = document.getElementById('lb-hint');
+
+      if (!username || !password) {
+        hint.textContent = 'Please enter your Letterboxd username and password.';
+        hint.classList.add('err');
+        return;
+      }
+
+      hint.classList.remove('err');
+      hint.textContent = 'Signing in...';
+
+      fetch(BASE + '/auth/letterboxd/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password })
+      })
+      .then(function(r) { return r.json().then(function(b) { return { ok: r.ok, body: b }; }); })
+      .then(function(result) {
+        if (!result.ok || !result.body || !result.body.token) {
+          throw new Error((result.body && result.body.error) || 'Letterboxd login failed.');
+        }
+        showLbResult(result.body.token, result.body.username || username);
+      })
+      .catch(function(err) {
+        hint.textContent = err.message || 'Letterboxd login failed.';
+        hint.classList.add('err');
+      });
+    }
+
+    function showLbResult(token, username) {
+      document.getElementById('lb-token').value = token;
+      document.getElementById('lb-username').value = username || '';
+      document.getElementById('lb-password').value = '';
+      document.getElementById('lb-pre').style.display = 'none';
+      document.getElementById('lb-post').style.display = 'block';
+
+      var cb = document.getElementById('lb-include');
+      var wrap = document.getElementById('lb-cb-wrap');
+      cb.disabled = false; cb.checked = true;
+      wrap.classList.add('enabled');
+      document.getElementById('lb-status').classList.add('show');
+
+      fetch(BASE + '/auth/letterboxd/' + token + '/status')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          var statusEl = document.getElementById('lb-auth-status');
+          if (data.authenticated) {
+            statusEl.textContent = '\u2705 Authenticated \u2014 watchlist sync enabled';
+          } else {
+            statusEl.textContent = 'Token expired. Please login again.';
+            statusEl.classList.add('err');
+          }
+        })
+        .catch(function() {});
+
+      try { localStorage.setItem('lb-token', token); } catch(e) {}
+      try { localStorage.setItem('lb-username', username || ''); } catch(e) {}
+      updateInstallAll();
+    }
+
+    function lbReset() {
+      document.getElementById('lb-post').style.display = 'none';
+      document.getElementById('lb-token').value = '';
+      document.getElementById('lb-auth-status').textContent = '';
+      document.getElementById('lb-pre').style.display = 'block';
+      document.getElementById('lb-password').value = '';
+      document.getElementById('lb-hint').textContent = 'Uses Letterboxd password grant to create your addon token.';
+      document.getElementById('lb-hint').classList.remove('err');
+
+      var cb = document.getElementById('lb-include');
+      var wrap = document.getElementById('lb-cb-wrap');
+      cb.disabled = true; cb.checked = false;
+      wrap.classList.remove('enabled');
+      document.getElementById('lb-status').classList.remove('show');
+
+      try { localStorage.removeItem('lb-token'); } catch(e) {}
+      updateInstallAll();
+    }
+
     // Restore MAL from localStorage
     (function() {
       if (document.getElementById('mal-post').style.display !== 'none') return;
       try {
         var saved = localStorage.getItem('mal-token');
         if (saved && /^[a-f0-9]{64}$/.test(saved)) showMalResult(saved);
+      } catch(e) {}
+    })();
+
+    // Restore Letterboxd from localStorage
+    (function() {
+      try {
+        var savedToken = localStorage.getItem('lb-token');
+        var savedUsername = localStorage.getItem('lb-username');
+        if (savedUsername) {
+          document.getElementById('lb-username').value = savedUsername;
+        }
+        if (savedToken && /^[a-f0-9]{64}$/.test(savedToken)) {
+          showLbResult(savedToken, savedUsername || '');
+        }
       } catch(e) {}
     })();
 
@@ -360,6 +493,11 @@ function configurePageHandler(req, res) {
       var imdbInput = document.getElementById('imdb-userid');
       if (imdbCb && imdbCb.checked && imdbInput && imdbInput.value.trim() && /^(ur\\d{4,15}|p\\.[a-z0-9]{10,50})$/.test(imdbInput.value.trim())) {
         cfg.imdb = imdbInput.value.trim();
+      }
+      var lbCb = document.getElementById('lb-include');
+      var lbToken = document.getElementById('lb-token');
+      if (lbCb && lbCb.checked && lbToken && /^[a-f0-9]{64}$/.test(lbToken.value)) {
+        cfg.letterboxd = lbToken.value;
       }
       return cfg;
     }
@@ -513,7 +651,45 @@ app.get('/auth/mal/callback', async (req, res) => {
 app.get('/auth/mal/:token/status', (req, res) => {
   const { token } = req.params;
   if (!isValidMalToken(token)) return res.status(400).json({ error: 'Invalid token' });
-  res.json({ authenticated: tokenManager.hasValidTokensByOpaqueToken(token) });
+  res.json({ authenticated: tokenManager.hasValidTokensByOpaqueToken('mal', token) });
+});
+
+app.post('/auth/letterboxd/login', async (req, res) => {
+  if (!config.letterboxdClientId || !config.letterboxdClientSecret) {
+    return res.status(400).json({ error: 'Letterboxd OAuth not configured on this server.' });
+  }
+
+  const username = String(req.body?.username || '').trim();
+  const password = String(req.body?.password || '');
+
+  if (!username || !password) {
+    return res.status(400).json({ error: 'username and password are required.' });
+  }
+
+  try {
+    const letterboxdService = require('./services/letterboxd');
+    await letterboxdService.authenticateUser(
+      username,
+      password,
+      config.letterboxdClientId,
+      config.letterboxdClientSecret
+    );
+
+    const opaqueToken = crypto.randomBytes(32).toString('hex');
+    tokenManager.storeServiceOpaqueToken('letterboxd', opaqueToken, username);
+
+    res.json({ token: opaqueToken, username: username.toLowerCase() });
+  } catch (err) {
+    const message = err.response?.data?.message || err.message || 'Letterboxd authentication failed.';
+    console.error('Letterboxd login error:', message);
+    res.status(400).json({ error: `Letterboxd authentication failed: ${message}` });
+  }
+});
+
+app.get('/auth/letterboxd/:token/status', (req, res) => {
+  const { token } = req.params;
+  if (!isValidLetterboxdToken(token)) return res.status(400).json({ error: 'Invalid token' });
+  res.json({ authenticated: tokenManager.hasValidTokensByOpaqueToken('letterboxd', token) });
 });
 
 // Exchange authorization code for token, return token to browser via URL hash
@@ -547,7 +723,7 @@ app.get('/auth/anilist/callback', async (req, res) => {
 });
 
 // --- Combined addon routes ---
-// Config token is base64url-encoded JSON: {"anilist":"<token>","mal":"<username>","imdb":"<userid>"}
+// Config token is base64url-encoded JSON: {"anilist":"<token>","mal":"<opaque>","imdb":"<userid>","letterboxd":"<opaque>"}
 function parseCombinedConfig(configStr) {
   try {
     const json = Buffer.from(configStr, 'base64url').toString('utf8');
@@ -568,6 +744,7 @@ function serviceForCatalogId(id) {
   if (id.startsWith('anilist.')) return 'anilist';
   if (id.startsWith('mal.')) return 'mal';
   if (id.startsWith('imdb.')) return 'imdb';
+  if (id.startsWith('letterboxd.')) return 'letterboxd';
   return null;
 }
 
@@ -590,8 +767,19 @@ app.get('/combined/:config/catalog/:type/:id/:extra?.json', async (req, res) => 
   if (!service || !svcConfig[service]) return res.status(HTTP_STATUS.NOT_FOUND).json({ error: 'Service not configured.' });
   try {
     const userParam = resolveServiceToken(service, svcConfig[service]);
-    if (service === 'mal' && !userParam) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: 'Invalid or expired MAL token.' });
-    const catalog = await addonInterface.getCatalog(type, id, extra, userParam, service, config.malClientId);
+    if ((service === 'mal' || service === 'letterboxd') && !userParam) {
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: `Invalid or expired ${service} token.` });
+    }
+    const catalog = await addonInterface.getCatalog(
+      type,
+      id,
+      extra,
+      userParam,
+      service,
+      config.malClientId,
+      config.letterboxdClientId,
+      config.letterboxdClientSecret
+    );
     res.json(catalog);
   } catch (error) {
     console.error('Combined catalog error:', error.message);
@@ -614,7 +802,7 @@ app.get('/combined/:config/meta/:type/:id.json', async (req, res) => {
   if (!token) return res.json({ meta: null });
   try {
     const userParam = resolveServiceToken(service, token);
-    if (service === 'mal' && !userParam) return res.json({ meta: null });
+    if ((service === 'mal' || service === 'letterboxd') && !userParam) return res.json({ meta: null });
     const meta = await addonInterface.getMeta(type, id, userParam, service, config.malClientId);
     res.json(meta);
   } catch (error) {
@@ -650,7 +838,7 @@ app.get('/combined/:config/stream/:type/:id.json', async (req, res) => {
   }
   try {
     const userParam = resolveServiceToken(service, token);
-    if (service === 'mal' && !userParam) return res.json({ streams: [] });
+    if ((service === 'mal' || service === 'letterboxd') && !userParam) return res.json({ streams: [] });
     const stream = await addonInterface.getStream(type, id, videoInfo, userParam, service, config.malClientId);
     res.json(stream);
   } catch (error) {
@@ -664,7 +852,11 @@ app.get('/:service/:token/manifest.json', (req, res) => {
   if (!VALID_SERVICES.has(service)) return res.status(HTTP_STATUS.NOT_FOUND).json({ error: 'Unknown service.' });
   if (!isValidServiceParam(service, token)) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid identifier.' });
   if (service === 'mal' && !config.malClientId) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'MAL not configured on this server (missing MAL_CLIENT_ID).' });
+  if (service === 'letterboxd' && !(config.letterboxdClientId && config.letterboxdClientSecret)) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Letterboxd not configured on this server (missing LETTERBOXD_CLIENT_ID / LETTERBOXD_CLIENT_SECRET).' });
+  }
   if (service === 'mal' && !resolveServiceToken('mal', token)) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: 'Invalid or expired MAL token.' });
+  if (service === 'letterboxd' && !resolveServiceToken('letterboxd', token)) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: 'Invalid or expired Letterboxd token.' });
   try {
     res.json(addonInterface.getManifest(service));
   } catch (error) {
@@ -678,10 +870,22 @@ app.get('/:service/:token/catalog/:type/:id/:extra?.json', async (req, res) => {
   if (!VALID_SERVICES.has(service)) return res.status(HTTP_STATUS.NOT_FOUND).json({ error: 'Unknown service.' });
   if (!isValidServiceParam(service, token)) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid identifier.' });
   if (service === 'mal' && !config.malClientId) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'MAL not configured on this server (missing MAL_CLIENT_ID).' });
+  if (service === 'letterboxd' && !(config.letterboxdClientId && config.letterboxdClientSecret)) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Letterboxd not configured on this server (missing LETTERBOXD_CLIENT_ID / LETTERBOXD_CLIENT_SECRET).' });
+  }
   try {
     const userParam = resolveServiceToken(service, token);
-    if (service === 'mal' && !userParam) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: 'Invalid or expired MAL token.' });
-    const catalog = await addonInterface.getCatalog(type, id, extra, userParam, service, config.malClientId);
+    if ((service === 'mal' || service === 'letterboxd') && !userParam) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: `Invalid or expired ${service} token.` });
+    const catalog = await addonInterface.getCatalog(
+      type,
+      id,
+      extra,
+      userParam,
+      service,
+      config.malClientId,
+      config.letterboxdClientId,
+      config.letterboxdClientSecret
+    );
     res.json(catalog);
   } catch (error) {
     console.error('Catalog error:', error.message);
@@ -694,9 +898,12 @@ app.get('/:service/:token/meta/:type/:id.json', async (req, res) => {
   if (!VALID_SERVICES.has(service)) return res.status(HTTP_STATUS.NOT_FOUND).json({ error: 'Unknown service.' });
   if (!isValidServiceParam(service, token)) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid identifier.' });
   if (service === 'mal' && !config.malClientId) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'MAL not configured on this server (missing MAL_CLIENT_ID).' });
+  if (service === 'letterboxd' && !(config.letterboxdClientId && config.letterboxdClientSecret)) {
+    return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Letterboxd not configured on this server (missing LETTERBOXD_CLIENT_ID / LETTERBOXD_CLIENT_SECRET).' });
+  }
   try {
     const userParam = resolveServiceToken(service, token);
-    if (service === 'mal' && !userParam) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: 'Invalid or expired MAL token.' });
+    if ((service === 'mal' || service === 'letterboxd') && !userParam) return res.status(HTTP_STATUS.UNAUTHORIZED).json({ error: `Invalid or expired ${service} token.` });
     const meta = await addonInterface.getMeta(type, id, userParam, service, config.malClientId);
     res.json(meta);
   } catch (error) {
@@ -743,7 +950,7 @@ app.get('/:service/:token/stream/:type/:id.json', async (req, res) => {
     }
 
     const userParam = resolveServiceToken(service, token);
-    if (service === 'mal' && !userParam) return res.json({ streams: [] });
+    if ((service === 'mal' || service === 'letterboxd') && !userParam) return res.json({ streams: [] });
     const stream = await addonInterface.getStream(type, id, videoInfo, userParam, service, config.malClientId);
     res.json(stream);
   } catch (error) {
