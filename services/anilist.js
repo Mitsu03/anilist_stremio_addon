@@ -941,7 +941,16 @@ module.exports = {
   mapAniListToMal,
   getSeasonAniListId,
   updateProgress,
-  getImdbForKitsuId
+  getImdbForKitsuId,
+  // Exposed for unit testing only
+  _test: {
+    extractKitsuId,
+    extractImdbId,
+    findRootKitsuIdInline,
+    findRootImdbIdInline,
+    transformToStremioMeta,
+    fribbLookup
+  }
 };
 
 // Made with Bob
