@@ -137,6 +137,16 @@ function hasValidTokens(service, username) {
   return getTokens(service, username) !== null;
 }
 
+/**
+ * Returns true if the user can be silently re-authenticated —
+ * either the access token is still valid, or a refresh_token is stored.
+ */
+function canAuthenticate(service, username) {
+  if (hasValidTokens(service, username)) return true;
+  const record = getTokenRecord(service, username);
+  return !!(record?.refresh_token);
+}
+
 // ---------------------------------------------------------------------------
 // Opaque MAL addon token store — maps a random 64-char hex token to a username
 // Persisted to tokens.json so addon URLs survive server restarts.
@@ -256,6 +266,7 @@ module.exports = {
   getTokenRecord,
   removeTokens,
   hasValidTokens,
+  canAuthenticate,
   getUserKey,
   storeCredentials,
   getCredentials,

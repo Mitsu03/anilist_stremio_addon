@@ -11,7 +11,7 @@
  */
 
 const axios = require('axios');
-const { MAL_API_URL, POSTER_SHAPES } = require('../config/constants');
+const { MAL_API_URL, MAL_OAUTH, POSTER_SHAPES } = require('../config/constants');
 const tokenManager = require('../config/tokens');
 const { TTLCache } = require('../config/cache');
 const mappings = require('../config/mappings');
@@ -392,6 +392,70 @@ function buildMeta(anime, progressEpisodes, kitsuId) {
 }
 
 /**
+ * Refreshes MAL OAuth tokens using the stored refresh_token.
+ * Persists the new token pair back to tokens.json on success.
+ *
+ * @async
+ * @param {string} username - MAL username whose tokens should be refreshed
+ * @param {string} clientId - MAL OAuth Client ID
+ * @param {string} clientSecret - MAL OAuth Client Secret
+ * @returns {Promise<string>} New access_token
+ * @throws {Error} If the refresh request fails or no refresh_token is stored
+ */
+async function refreshMalTokens(username, clientId, clientSecret) {
+  const record = tokenManager.getTokenRecord('mal', username);
+  const refreshToken = record?.refresh_token;
+
+  if (!refreshToken) {
+    throw new Error(`No refresh_token stored for MAL user "${username}". Re-authentication required.`);
+  }
+
+  console.log(`[MAL] Refreshing access token for user: ${username}`);
+
+  const { data } = await axios.post(MAL_OAUTH.TOKEN_URL, new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: clientId,
+    client_secret: clientSecret
+  }), {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    timeout: 15000
+  });
+
+  if (!data?.access_token) {
+    throw new Error('MAL token refresh returned no access_token.');
+  }
+
+  tokenManager.storeTokens('mal', username, {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token || refreshToken,
+    expires_in: data.expires_in || 2592000  // default 30 days
+  });
+
+  console.log(`[MAL] Token refreshed successfully for user: ${username}`);
+  return data.access_token;
+}
+
+/**
+ * Returns a valid MAL access token for the given user, automatically
+ * refreshing via refresh_token if the stored access token has expired.
+ *
+ * @async
+ * @param {string} username - MAL username
+ * @param {string} clientId - MAL OAuth Client ID
+ * @param {string} clientSecret - MAL OAuth Client Secret
+ * @returns {Promise<string>} A valid access_token
+ * @throws {Error} If neither a valid access_token nor a refresh_token is available
+ */
+async function getMalAccessToken(username, clientId, clientSecret) {
+  const tokens = tokenManager.getTokens('mal', username);
+  if (tokens?.access_token) return tokens.access_token;
+
+  // Access token expired or missing — attempt silent refresh
+  return refreshMalTokens(username, clientId, clientSecret);
+}
+
+/**
  * Updates the user's progress for an anime on MyAnimeList.
  * Requires the user to have authenticated via OAuth (token stored in tokens.json).
  *
@@ -399,7 +463,7 @@ function buildMeta(anime, progressEpisodes, kitsuId) {
  * @param {string} animeId - MAL anime ID
  * @param {number} episode - Episode number that was watched
  * @param {string} username - User's MAL username
- * @param {string} clientId - MAL Client ID (unused here, kept for signature compat)
+ * @param {string} clientId - MAL Client ID
  * @returns {Promise<void>}
  * @throws {Error} If progress update fails
  */
@@ -407,8 +471,9 @@ async function updateProgress(animeId, episode, username, clientId) {
   try {
     console.log(`Updating progress for MAL anime ${animeId}: episode ${episode} for user ${username}`);
 
-    const tokens = tokenManager.getTokens('mal', username);
-    if (!tokens) {
+    const config = require('../config/env');
+    const accessToken = await getMalAccessToken(username, clientId, config.malClientSecret);
+    if (!accessToken) {
       throw new Error('User not authenticated with MyAnimeList. Please authenticate via the configure page.');
     }
 
@@ -417,7 +482,7 @@ async function updateProgress(animeId, episode, username, clientId) {
       new URLSearchParams({ num_watched_episodes: episode }),
       {
         headers: {
-          'Authorization': `Bearer ${tokens.access_token}`,
+          'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/x-www-form-urlencoded'
         },
         timeout: 10000
@@ -456,6 +521,8 @@ module.exports = {
   getAnimeList,
   getAnimeMeta,
   updateProgress,
+  refreshMalTokens,
+  getMalAccessToken,
   mapKitsuToMal,
   getAuthenticatedUsername
 };

@@ -647,11 +647,13 @@ app.get('/auth/mal/callback', async (req, res) => {
   }
 });
 
-// Check if a MAL opaque token is still authenticated
+// Check if a MAL opaque token is still authenticated (valid access token OR usable refresh token)
 app.get('/auth/mal/:token/status', (req, res) => {
   const { token } = req.params;
   if (!isValidMalToken(token)) return res.status(400).json({ error: 'Invalid token' });
-  res.json({ authenticated: tokenManager.hasValidTokensByOpaqueToken('mal', token) });
+  const username = tokenManager.resolveServiceOpaqueToken('mal', token);
+  const authenticated = username ? tokenManager.canAuthenticate('mal', username) : false;
+  res.json({ authenticated });
 });
 
 app.post('/auth/letterboxd/login', async (req, res) => {
@@ -969,6 +971,48 @@ app.listen(config.port, () => {
   console.log(`Configure: http://localhost:${config.port}/`);
   console.log(`Manifest:  http://localhost:${config.port}/anilist/<token>/manifest.json`);
   console.log('='.repeat(60));
+
+  // Proactively refresh MAL tokens every 12 hours so they never expire
+  // between user visits. Runs once at startup (after a short delay) and
+  // then on the fixed interval.
+  if (config.malClientId && config.malClientSecret) {
+    const { refreshMalTokens } = require('./services/mal');
+
+    async function proactiveMALRefresh() {
+      const fs = require('fs');
+      const path = require('path');
+      const tokensFile = path.join(__dirname, 'data', 'tokens.json');
+      let allTokens;
+      try {
+        allTokens = JSON.parse(fs.readFileSync(tokensFile, 'utf8'));
+      } catch (_) {
+        return;
+      }
+
+      const REFRESH_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000; // 7 days before expiry
+      const now = Date.now();
+
+      for (const [key, record] of Object.entries(allTokens)) {
+        if (!key.startsWith('mal:') || key.startsWith('mal_link:')) continue;
+        if (!record.refresh_token) continue;
+
+        const needsRefresh = !record.expires_at || (record.expires_at - now) < REFRESH_THRESHOLD_MS;
+        if (!needsRefresh) continue;
+
+        const username = key.replace(/^mal:/, '');
+        try {
+          await refreshMalTokens(username, config.malClientId, config.malClientSecret);
+          console.log(`[MAL] Proactive token refresh succeeded for user: ${username}`);
+        } catch (err) {
+          console.warn(`[MAL] Proactive token refresh failed for user "${username}": ${err.message}`);
+        }
+      }
+    }
+
+    // First run after 30 seconds, then every 12 hours
+    setTimeout(proactiveMALRefresh, 30 * 1000);
+    setInterval(proactiveMALRefresh, 12 * 60 * 60 * 1000);
+  }
 });
 
 process.on('SIGINT', () => process.exit(0));
