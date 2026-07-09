@@ -140,6 +140,10 @@ async function getCatalog(type, id, extra, username, service, malClientId, lette
       return { metas: [] };
     }
 
+    // User is back on the catalog — they left every episode, so cancel and
+    // reset all their pending progress timers.
+    if (username) cancelPendingTimers(String(username).slice(0, 32));
+
     // Parse genre filter from extra string, e.g. "genre=On%20Hold"
     let genreFilter = 'Currently Watching';
     if (extra) {
@@ -337,45 +341,56 @@ async function getStream(type, id, videoInfo, username, service, malClientId) {
 
     // Handle progress update if videoInfo contains episode information
     if (videoInfo && videoInfo.episode) {
+      const episode = videoInfo.episode;
+      const userKey = String(username).slice(0, 32);
       try {
-        const tokenManager = require('./config/tokens');
         tokenManager.cleanupOldSessions(actualService, username);
-        const isNewSession = tokenManager.storeWatchSession(actualService, username, animeId, videoInfo.episode);
+
+        // User navigated to this title — reset the timers/sessions of every
+        // other episode they left, keeping the current one so a repeated
+        // stream request doesn't restart its 5-minute count.
+        cancelPendingTimers(userKey, new Set([_timerKey(actualService, animeId, episode)]));
+
+        tokenManager.storeWatchSession(actualService, username, animeId, episode);
 
         // Only update after watching the same episode for 5+ minutes
-        if (tokenManager.shouldUpdateProgress(actualService, username, animeId, videoInfo.episode)) {
-          tokenManager.markProgressUpdated(actualService, username, animeId, videoInfo.episode);
+        if (tokenManager.shouldUpdateProgress(actualService, username, animeId, episode)) {
+          tokenManager.markProgressUpdated(actualService, username, animeId, episode);
           if (actualService === 'mal') {
-            await malService.updateProgress(animeId, videoInfo.episode, username, malClientId);
+            await malService.updateProgress(animeId, episode, username, malClientId);
           } else {
-            await anilistService.updateProgress(animeId, videoInfo.episode, username);
+            await anilistService.updateProgress(animeId, episode, username);
           }
-          console.log(`✅ Updated progress for ${actualService} anime ${animeId}: episode ${videoInfo.episode} (5min threshold met)`);
+          console.log(`✅ Updated progress for ${actualService} anime ${animeId}: episode ${episode} (5min threshold met)`);
+        } else if (hasPendingTimer(userKey, actualService, animeId, episode)) {
+          // Already counting for this episode — leave the running timer as is.
+          console.log(`⏳ Watch session for ${actualService} anime ${animeId} ep ${episode} - already counting`);
         } else {
-          console.log(`⏳ Watch session for ${actualService} anime ${animeId} ep ${videoInfo.episode} - waiting for 5min threshold`);
+          console.log(`⏳ Watch session for ${actualService} anime ${animeId} ep ${episode} - waiting for 5min threshold`);
           // Stremio only calls the stream endpoint once, so schedule a deferred update
-          if (isNewSession) {
-            const _svc = actualService;
-            const _animeId = animeId;
-            const _ep = videoInfo.episode;
-            const _user = username;
-            const _clientId = malClientId;
-            setTimeout(async () => {
-              if (tokenManager.shouldUpdateProgress(_svc, _user, _animeId, _ep)) {
-                try {
-                  tokenManager.markProgressUpdated(_svc, _user, _animeId, _ep);
-                  if (_svc === 'mal') {
-                    await malService.updateProgress(_animeId, _ep, _user, _clientId);
-                  } else {
-                    await anilistService.updateProgress(_animeId, _ep, _user);
-                  }
-                  console.log(`✅ Updated progress for ${_svc} anime ${_animeId}: episode ${_ep} (deferred 5min)`);
-                } catch (e) {
-                  console.error(`Deferred progress update failed for ${_svc} anime ${_animeId}:`, e.message);
+          const _svc = actualService;
+          const _animeId = animeId;
+          const _ep = episode;
+          const _user = username;
+          const _clientId = malClientId;
+          const entry = { service: _svc, token: _user, animeId: _animeId, episode: _ep };
+          entry.timerId = setTimeout(async () => {
+            pendingTimers.get(userKey)?.delete(entry);
+            if (tokenManager.shouldUpdateProgress(_svc, _user, _animeId, _ep)) {
+              try {
+                tokenManager.markProgressUpdated(_svc, _user, _animeId, _ep);
+                if (_svc === 'mal') {
+                  await malService.updateProgress(_animeId, _ep, _user, _clientId);
+                } else {
+                  await anilistService.updateProgress(_animeId, _ep, _user);
                 }
+                console.log(`✅ Updated progress for ${_svc} anime ${_animeId}: episode ${_ep} (deferred 5min)`);
+              } catch (e) {
+                console.error(`Deferred progress update failed for ${_svc} anime ${_animeId}:`, e.message);
               }
-            }, 5 * 60 * 1000 + 2000);
-          }
+            }
+          }, 5 * 60 * 1000 + 2000);
+          registerPendingTimer(userKey, entry);
         }
       } catch (progressError) {
         console.error(`Failed to update progress for ${actualService} anime ${animeId}:`, progressError.message);
@@ -506,8 +521,10 @@ async function getCombinedCatalog(type, id, extra, serviceConfig, malClientId, l
 }
 
 // Pending deferred progress-update timers, keyed by user identifier.
-// When the user navigates away (new stream request), all pending timers for
-// that user are cancelled so we don't update the episode they left.
+// When the user navigates away (new stream request / catalog), the pending
+// timers for the episodes they left are cancelled AND their watch sessions
+// are reset, so returning to an episode restarts the 5-minute timer from zero.
+// Each entry: { timerId, service, token, animeId, episode }.
 const pendingTimers = new Map();
 
 function _userKey(svcConfig) {
@@ -515,13 +532,49 @@ function _userKey(svcConfig) {
   return String(tag).slice(0, 32);
 }
 
-function cancelPendingTimers(userKey) {
+// Identifies a timer by the episode it tracks (independent of the user token).
+function _timerKey(service, animeId, episode) {
+  return `${service}:${animeId}:${episode}`;
+}
+
+/**
+ * Cancels pending timers for a user and resets the corresponding watch
+ * sessions. Pass `keep` (a Set of _timerKey values) to spare the timers for
+ * the title the user is currently on — those keep counting uninterrupted.
+ */
+function cancelPendingTimers(userKey, keep = null) {
   const timers = pendingTimers.get(userKey);
-  if (timers && timers.size > 0) {
-    for (const t of timers) clearTimeout(t);
-    console.log(`⏹ Cancelled ${timers.size} pending progress update(s) for user ${userKey.slice(0, 8)}...`);
-    pendingTimers.set(userKey, new Set());
+  if (!timers || timers.size === 0) {
+    if (!timers) pendingTimers.set(userKey, new Set());
+    return;
   }
+  let cancelled = 0;
+  for (const entry of [...timers]) {
+    if (keep && keep.has(_timerKey(entry.service, entry.animeId, entry.episode))) continue;
+    clearTimeout(entry.timerId);
+    tokenManager.clearWatchSession(entry.service, entry.token, entry.animeId, entry.episode);
+    timers.delete(entry);
+    cancelled++;
+  }
+  if (cancelled) {
+    console.log(`⏹ Cancelled ${cancelled} pending progress update(s) for user ${userKey.slice(0, 8)}...`);
+  }
+}
+
+// True if a timer is already counting for this exact episode.
+function hasPendingTimer(userKey, service, animeId, episode) {
+  const timers = pendingTimers.get(userKey);
+  if (!timers) return false;
+  const key = _timerKey(service, animeId, episode);
+  for (const entry of timers) {
+    if (_timerKey(entry.service, entry.animeId, entry.episode) === key) return true;
+  }
+  return false;
+}
+
+function registerPendingTimer(userKey, entry) {
+  if (!pendingTimers.has(userKey)) pendingTimers.set(userKey, new Set());
+  pendingTimers.get(userKey).add(entry);
 }
 
 /**
@@ -542,10 +595,6 @@ async function getCombinedStream(type, id, videoInfo, svcConfig, malClientId) {
 
     const episode = videoInfo.episode;
     const userKey = _userKey(svcConfig);
-
-    // Cancel any pending deferred updates — the user navigated to a new title
-    cancelPendingTimers(userKey);
-    if (!pendingTimers.has(userKey)) pendingTimers.set(userKey, new Set());
 
     // Resolve the content ID to per-service IDs in parallel
     let anilistId = null;
@@ -579,6 +628,14 @@ async function getCombinedStream(type, id, videoInfo, svcConfig, malClientId) {
       return { streams: [] };
     }
 
+    // The user navigated to this title — reset the timers/sessions of every
+    // OTHER episode they left, but keep the ones for the current title so a
+    // repeated stream request doesn't restart their 5-minute count.
+    const keep = new Set();
+    if (anilistId && svcConfig.anilist) keep.add(_timerKey('anilist', anilistId, episode));
+    if (malId && svcConfig.mal) keep.add(_timerKey('mal', malId, episode));
+    cancelPendingTimers(userKey, keep);
+
     const updateNow = [];
 
     // Helper: schedule immediate + deferred update for a service
@@ -595,9 +652,13 @@ async function getCombinedStream(type, id, videoInfo, svcConfig, malClientId) {
            .catch(e => console.error(`${svc} progress update failed:`, e.message))
         );
       } else {
+        // Already counting for this episode (e.g. a repeated stream request) —
+        // leave the running timer untouched so the count isn't restarted.
+        if (hasPendingTimer(userKey, svc, animeIdForSvc, episode)) return;
         const _svc = svc, _id = animeIdForSvc, _token = token;
-        const timerId = setTimeout(async () => {
-          pendingTimers.get(userKey)?.delete(timerId);
+        const entry = { service: _svc, token: _token, animeId: _id, episode };
+        entry.timerId = setTimeout(async () => {
+          pendingTimers.get(userKey)?.delete(entry);
           if (tokenManager.shouldUpdateProgress(_svc, _token, _id, episode)) {
             tokenManager.markProgressUpdated(_svc, _token, _id, episode);
             try {
@@ -612,7 +673,7 @@ async function getCombinedStream(type, id, videoInfo, svcConfig, malClientId) {
             }
           }
         }, 5 * 60 * 1000 + 2000);
-        pendingTimers.get(userKey).add(timerId);
+        registerPendingTimer(userKey, entry);
       }
     }
 

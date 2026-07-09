@@ -240,6 +240,20 @@ function markProgressUpdated(service, token, animeId, episode) {
   if (watchSessions[key]) watchSessions[key].lastUpdated = Date.now();
 }
 
+/**
+ * Delete the watch session for a specific episode. Used when the user leaves
+ * the episode so that returning to it restarts the 5-minute timer from zero.
+ * @returns {boolean} true if a session existed and was removed
+ */
+function clearWatchSession(service, token, animeId, episode) {
+  const key = _sessionKey(service, token, animeId, episode);
+  if (watchSessions[key]) {
+    delete watchSessions[key];
+    return true;
+  }
+  return false;
+}
+
 function updateWatchSessionAccess(service, token, animeId, episode) {
   const key = _sessionKey(service, token, animeId, episode);
   if (watchSessions[key]) watchSessions[key].lastAccess = Date.now();
@@ -275,6 +289,7 @@ module.exports = {
   storeWatchSession,
   shouldUpdateProgress,
   markProgressUpdated,
+  clearWatchSession,
   updateWatchSessionAccess,
   cleanupOldSessions,
   storeServiceOpaqueToken,
