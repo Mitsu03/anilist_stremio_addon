@@ -11,6 +11,12 @@
  */
 
 const { POSTER_SHAPES } = require('../config/constants');
+const { TTLCache } = require('../config/cache');
+
+// 5-minute TTL for watchlist/list responses
+const watchlistCache = new TTLCache(5 * 60 * 1000);
+// 1-hour TTL for profile ID resolution (rarely changes)
+const profileIdCache = new TTLCache(60 * 60 * 1000);
 
 const IMDB_GRAPHQL_URL = 'https://api.graphql.imdb.com/';
 const IMDB_CLIENT_NAME = 'imdb-next-desktop';
@@ -173,6 +179,11 @@ const RESOLVE_PROFILE_QUERY = `
  * @throws {Error} If profile cannot be resolved
  */
 async function resolveProfileId(profileId) {
+  const cached = profileIdCache.get(profileId);
+  if (cached) {
+    console.log(`[cache] Returning cached profile resolution ${profileId} -> ${cached}`);
+    return cached;
+  }
   const json = await queryImdbGraphQL('ResolveProfile', RESOLVE_PROFILE_QUERY, {
     input: { profileId }
   });
@@ -182,6 +193,7 @@ async function resolveProfileId(profileId) {
     throw new Error(`Could not resolve IMDB profile "${profileId}" to a user ID. Please check the profile URL.`);
   }
   console.log(`Resolved IMDB profile ${profileId} -> ${userId}`);
+  profileIdCache.set(profileId, userId);
   return userId;
 }
 
@@ -194,12 +206,18 @@ async function resolveProfileId(profileId) {
  * @throws {Error} If watchlist not found, private, or API error
  */
 async function getWatchlist(userId) {
-  console.log(`Fetching IMDB watchlist for user: ${userId}`);
-
   // Resolve p. profile IDs to classic ur IDs
   if (userId.startsWith('p.')) {
     userId = await resolveProfileId(userId);
   }
+
+  const cached = watchlistCache.get(userId);
+  if (cached) {
+    console.log(`[cache] Returning cached IMDB watchlist for ${userId} (${cached.length} items)`);
+    return cached;
+  }
+
+  console.log(`Fetching IMDB watchlist for user: ${userId}`);
 
   const json = await queryImdbGraphQL('WatchListPage', WATCHLIST_QUERY, {
     urConst: userId,
@@ -224,7 +242,9 @@ async function getWatchlist(userId) {
 
   const edges = list.titleListItemSearch?.edges || [];
   console.log(`Found ${edges.length} items in IMDB watchlist for ${userId}`);
-  return transformEdgesToMetas(edges);
+  const result = transformEdgesToMetas(edges);
+  watchlistCache.set(userId, result);
+  return result;
 }
 
 /**
@@ -236,6 +256,12 @@ async function getWatchlist(userId) {
  * @throws {Error} If list not found, private, or API error
  */
 async function getList(listId) {
+  const cached = watchlistCache.get(listId);
+  if (cached) {
+    console.log(`[cache] Returning cached IMDB list ${listId} (${cached.length} items)`);
+    return cached;
+  }
+
   console.log(`Fetching IMDB list: ${listId}`);
 
   const json = await queryImdbGraphQL('ListPage', LIST_QUERY, {
@@ -261,7 +287,9 @@ async function getList(listId) {
 
   const edges = list.titleListItemSearch?.edges || [];
   console.log(`Found ${edges.length} items in IMDB list ${listId}`);
-  return transformEdgesToMetas(edges);
+  const result = transformEdgesToMetas(edges);
+  watchlistCache.set(listId, result);
+  return result;
 }
 
 /**

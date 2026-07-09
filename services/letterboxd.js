@@ -9,12 +9,16 @@
 
 const axios = require('axios');
 const tokenManager = require('../config/tokens');
+const { TTLCache } = require('../config/cache');
 const {
 	LETTERBOXD_API_URL,
 	LETTERBOXD_TOKEN_URL,
 	LETTERBOXD_USER_AGENT,
 	POSTER_SHAPES
 } = require('../config/constants');
+
+// 5-minute TTL for catalog responses, keyed by username:status
+const catalogCache = new TTLCache(5 * 60 * 1000);
 
 const APP_TOKEN_CACHE = {
 	accessToken: null,
@@ -187,6 +191,13 @@ async function fetchMemberWatched(memberId, accessToken) {
 
 async function getCatalog(username, status, clientId, clientSecret) {
 	try {
+		const cacheKey = `${username}:${status}`;
+		const cached = catalogCache.get(cacheKey);
+		if (cached) {
+			console.log(`[cache] Returning cached Letterboxd ${status} catalog for ${username} (${cached.length} items)`);
+			return cached;
+		}
+
 		const token = await getStoredUserAccessToken(username, clientId, clientSecret);
 		const me = await getMe(token);
 		if (!me?.id) throw new Error('Could not determine authenticated Letterboxd member.');
@@ -196,7 +207,9 @@ async function getCatalog(username, status, clientId, clientSecret) {
 			: await fetchMemberWatchlist(me.id, token);
 
 		const watched = status === 'Watched';
-		return items.map(film => filmToMeta(film, watched));
+		const result = items.map(film => filmToMeta(film, watched));
+		catalogCache.set(cacheKey, result);
+		return result;
 	} catch (error) {
 		if (error.response?.status === 401) {
 			throw new Error('Letterboxd auth expired. Please login again.');
