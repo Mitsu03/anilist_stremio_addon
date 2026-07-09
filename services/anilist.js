@@ -11,6 +11,7 @@ const axios = require('axios');
 const { ANILIST_API_URL, ANILIST_STATUS, POSTER_SHAPES } = require('../config/constants');
 const mappings = require('../config/mappings');
 const { TTLCache } = require('../config/cache');
+const { fetchKitsuIdMap } = require('./mal');
 
 // Cache viewer info so we only look it up once per token
 const viewerCache = new Map();
@@ -56,6 +57,7 @@ const ANIME_META_QUERY = `
   query ($id: Int) {
     Media(id: $id, type: ANIME) {
       id
+      idMal
       title {
         english
         romaji
@@ -73,6 +75,9 @@ const ANIME_META_QUERY = `
       episodes
       seasonYear
       season
+      nextAiringEpisode {
+        episode
+      }
       externalLinks {
         url
         site
@@ -190,8 +195,15 @@ async function getAnimeList(token, status) {
     const entries = mediaListCollection.lists[0]?.entries || [];
     console.log(`Found ${entries.length} ${status} anime`);
 
+    // Batch-resolve Kitsu IDs for all entries that have a MAL ID
+    const malIds = entries
+      .map(e => e.media.idMal)
+      .filter(Boolean)
+      .map(String);
+    const kitsuIdMap = await fetchKitsuIdMap(malIds);
+
     // Transform AniList entries to Stremio meta format
-    const result = entries.map(entry => transformToStremioMeta(entry));
+    const result = entries.map(entry => transformToStremioMeta(entry, kitsuIdMap));
     animeListCache.set(cacheKey, result);
     return result;
 
@@ -263,7 +275,7 @@ function extractKitsuId(externalLinks) {
   return match ? match[1] : null;
 }
 
-function transformToStremioMeta(entry) {
+function transformToStremioMeta(entry, kitsuIdMap = {}) {
   const media = entry.media;
   
   // Prefer English title, fallback to Romaji
@@ -286,21 +298,28 @@ function transformToStremioMeta(entry) {
     ? media.description.replace(/<[^>]*>/g, '').trim()
     : '';
 
-  // Prefer kitsu: IDs so stream addons (Comet, MediaFusion, AIO Streams) can
-  // find streams. Fall back to anilist: if no Kitsu link is available.
-  const kitsuId = extractKitsuId(media.externalLinks);
+  // Resolve Kitsu ID from: externalLinks → batch map (via idMal) → fallback to anilist:
+  const kitsuId = extractKitsuId(media.externalLinks)
+    || (media.idMal && kitsuIdMap[String(media.idMal)])
+    || null;
+
+  // Use kitsu: ID so video IDs prefix-match the meta ID — required for
+  // Stremio watched tracking (yellow banner). Fall back to anilist: if unresolved.
   const id = kitsuId ? `kitsu:${kitsuId}` : `anilist:${media.id}`;
 
-  // Persist kitsu → anilist mapping so future requests skip the API
-  if (kitsuId) mappings.set('kitsu_to_anilist', kitsuId, String(media.id));
+  // Persist kitsu ↔ anilist mapping so future requests skip the API
+  if (kitsuId) {
+    mappings.set('kitsu_to_anilist', kitsuId, String(media.id));
+    mappings.set('anilist_to_kitsu', String(media.id), kitsuId);
+  }
 
   // Use 'movie' for films, 'series' for everything else so stream addons
   // (Comet, MediaFusion, AIO Streams) recognise the content type.
   const type = media.format === 'MOVIE' ? 'movie' : 'series';
 
   return {
-    id: `anilist:${media.id}`,
-    type: 'anime',
+    id,
+    type,
     name: title,
     aliases,
     poster: media.coverImage.large || media.coverImage.medium,
@@ -371,18 +390,75 @@ async function getAnimeMeta(id) {
       ? media.description.replace(/<[^>]*>/g, '').trim()
       : '';
 
+    const isMovie = media.format === 'MOVIE';
+    const type = isMovie ? 'movie' : 'series';
+
+    // Resolve Kitsu ID so video IDs match the ecosystem standard (kitsu:{id}:{ep}).
+    // This ensures the yellow "watched" banner appears in Stremio.
+    let kitsuId = extractKitsuId(media.externalLinks);
+    if (!kitsuId && media.idMal) {
+      kitsuId = mappings.get('mal_to_kitsu', String(media.idMal));
+    }
+    if (!kitsuId) {
+      kitsuId = mappings.get('anilist_to_kitsu', String(anilistId));
+    }
+    console.log(`[meta] anilist:${anilistId} → idMal=${media.idMal}, kitsuId=${kitsuId || 'NONE'}`);
+    if (kitsuId) {
+      mappings.set('anilist_to_kitsu', String(anilistId), kitsuId);
+      mappings.set('kitsu_to_anilist', kitsuId, String(anilistId));
+    }
+
+    // For ongoing series nextAiringEpisode.episode is the NEXT episode number,
+    // so the last aired episode is episode - 1.
+    // Fall back to 500 when neither field is available (unknown ongoing series).
+    let episodeCount = media.episodes || 0;
+    if (!isMovie && episodeCount === 0) {
+      if (media.nextAiringEpisode?.episode > 1) {
+        episodeCount = media.nextAiringEpisode.episode - 1;
+      } else if (media.status === 'RELEASING') {
+        episodeCount = 500;
+      }
+    }
+
+    // Use kitsu-format video IDs (3-part: kitsu:{id}:{ep}) when possible,
+    // matching Torrentio/AIO Streams/other addons. Fall back to anilist 4-part.
+    const videoPrefix = kitsuId ? `kitsu:${kitsuId}` : null;
+    const videos = [];
+    if (!isMovie && episodeCount > 0) {
+      const pastDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      for (let ep = 1; ep <= episodeCount; ep++) {
+        videos.push({
+          id: videoPrefix ? `${videoPrefix}:${ep}` : `${id}:1:${ep}`,
+          title: `Episode ${ep}`,
+          season: 1,
+          episode: ep,
+          released: pastDate,
+          overview: '',
+          available: true
+        });
+      }
+      console.log(`[meta] Video IDs format: ${videos[0]?.id} (${videos.length} episodes, type=${isMovie ? 'movie' : 'series'})`);
+    }
+
     const meta = {
       id,
-      type: 'series',
+      type,
       name: title,
       description: cleanDescription,
       poster: media.coverImage?.large || media.coverImage?.medium,
       background: media.bannerImage,
       genres: media.genres || [],
       imdbRating: rating,
-      releaseInfo: media.seasonYear ? String(media.seasonYear) : undefined
+      releaseInfo: media.seasonYear ? String(media.seasonYear) : undefined,
+      videos: isMovie ? undefined : videos,
+      behaviorHints: isMovie ? { defaultVideoId: videoPrefix ? `kitsu:${kitsuId}` : id } : undefined
     };
-    animeMetaCache.set(id, meta);
+    // Only cache if kitsu resolution succeeded or there's no MAL equivalent.
+    // If an anime has a MAL ID but we couldn't resolve kitsu, it's likely a
+    // race condition (mapping not loaded yet) — skip cache so next request retries.
+    if (kitsuId || isMovie || !media.idMal) {
+      animeMetaCache.set(id, meta);
+    }
     return meta;
   } catch (error) {
     console.error(`Error fetching anime meta for ${id}:`, error.message);
@@ -418,6 +494,7 @@ async function mapKitsuToAniList(kitsuId) {
     if (anilistMapping) {
       const anilistId = anilistMapping.attributes.externalId;
       mappings.set('kitsu_to_anilist', kitsuId, anilistId);
+      mappings.set('anilist_to_kitsu', anilistId, kitsuId);
       return anilistId;
     }
     // Fallback: try MAL mapping → AniList idMal lookup
@@ -428,6 +505,7 @@ async function mapKitsuToAniList(kitsuId) {
       const anilistId = await mapMalIdToAniList(parseInt(malMapping.attributes.externalId, 10));
       if (anilistId) {
         mappings.set('kitsu_to_anilist', kitsuId, anilistId);
+        mappings.set('anilist_to_kitsu', anilistId, kitsuId);
         return anilistId;
       }
     }

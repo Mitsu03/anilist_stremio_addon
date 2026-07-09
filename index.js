@@ -795,9 +795,21 @@ app.get('/combined/:config/meta/:type/:id.json', async (req, res) => {
   const svcConfig = parseCombinedConfig(req.params.config);
   if (!svcConfig) return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Invalid combined config.' });
   const { type, id } = req.params;
+
+  // kitsu: meta uses public Kitsu API — no credentials needed
+  if (id.startsWith('kitsu:')) {
+    try {
+      const meta = await addonInterface.getMeta(type, id, null, 'mal', config.malClientId);
+      return res.json(meta);
+    } catch (error) {
+      console.error('Combined meta error:', error.message);
+      return res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({ error: error.message || 'Failed to fetch meta' });
+    }
+  }
+
   // Determine service from ID prefix
   let service = 'anilist';
-  if (id.startsWith('mal:') || id.startsWith('kitsu:')) {
+  if (id.startsWith('mal:')) {
     service = svcConfig.mal ? 'mal' : 'anilist';
   } else if (id.startsWith('tt')) {
     service = svcConfig.imdb ? 'imdb' : 'anilist';

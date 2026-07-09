@@ -180,6 +180,31 @@ async function getAnimeMeta(id, clientId) {
     }
 
     const meta = transformSingleToMeta(anime);
+
+    // Add episode list so Stremio's "mark as watched" button works.
+    const isMovie = anime.media_type === 'movie';
+    // num_episodes is 0 for ongoing series; fall back to 500 so episodes are
+    // still generated for currently-airing anime.
+    const episodeCount = anime.num_episodes || (isMovie ? 0 : 500);
+    if (!isMovie && episodeCount > 0) {
+      meta.videos = [];
+      const pastDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      for (let ep = 1; ep <= episodeCount; ep++) {
+        meta.videos.push({
+          id: `${meta.id}:1:${ep}`,
+          title: `Episode ${ep}`,
+          season: 1,
+          episode: ep,
+          released: pastDate,
+          overview: '',
+          available: true
+        });
+      }
+    }
+    if (isMovie) {
+      meta.behaviorHints = { defaultVideoId: meta.id };
+    }
+
     animeMetaCache.set(id, meta);
     return meta;
 
@@ -233,9 +258,30 @@ async function fetchKitsuMeta(id) {
     ? attrs.synopsis.replace(/<[^>]*>/g, '').trim()
     : '';
 
+  const isMovie = attrs.showType === 'movie';
+  const type = isMovie ? 'movie' : 'series';
+  // episodeCount is null for ongoing series; fall back to 500.
+  const episodeCount = attrs.episodeCount || (isMovie ? 0 : 500);
+
+  const videos = [];
+  if (!isMovie && episodeCount > 0) {
+    const pastDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    for (let ep = 1; ep <= episodeCount; ep++) {
+      videos.push({
+        id: `${id}:${ep}`,
+        title: `Episode ${ep}`,
+        season: 1,
+        episode: ep,
+        released: pastDate,
+        overview: '',
+        available: true
+      });
+    }
+  }
+
   const meta = {
     id,
-    type: 'anime',
+    type,
     name: title,
     poster: attrs.posterImage?.large || attrs.posterImage?.medium,
     posterShape: POSTER_SHAPES.PORTRAIT,
@@ -243,7 +289,9 @@ async function fetchKitsuMeta(id) {
     description: cleanDescription,
     imdbRating: rating,
     releaseInfo: year ? `${year}` : undefined,
-    year
+    year,
+    videos: isMovie ? undefined : videos,
+    behaviorHints: isMovie ? { defaultVideoId: id } : undefined
   };
   animeMetaCache.set(id, meta);
   return meta;
@@ -524,7 +572,8 @@ module.exports = {
   refreshMalTokens,
   getMalAccessToken,
   mapKitsuToMal,
-  getAuthenticatedUsername
+  getAuthenticatedUsername,
+  fetchKitsuIdMap
 };
 
 /**

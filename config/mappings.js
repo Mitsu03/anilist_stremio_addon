@@ -15,6 +15,7 @@ const MAPPINGS_PATH = path.join(__dirname, '../data/mappings.json');
 
 const DEFAULT_MAPPINGS = {
   kitsu_to_anilist: {},
+  anilist_to_kitsu: {},
   mal_to_anilist: {},
   anilist_to_mal: {},
   imdb_to_anilist: {},

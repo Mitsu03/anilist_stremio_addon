@@ -155,11 +155,6 @@ const IMDB_CATALOGS = [
     type: 'series',
     id: 'imdb.watchlist',
     name: 'IMDB Watchlist'
-  },
-  {
-    type: 'anime',
-    id: 'imdb.watchlist',
-    name: 'IMDB Watchlist'
   }
 ];
 
@@ -238,7 +233,7 @@ const ANILIST_STATUS = {
  * @constant {Object}
  */
 const POSTER_SHAPES = {
-  PORTRAIT: 'portrait',
+  PORTRAIT: 'poster',
   LANDSCAPE: 'landscape',
   SQUARE: 'square'
 };
