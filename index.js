@@ -64,9 +64,6 @@ function resolveServiceToken(service, token) {
 const VALID_SERVICES = new Set(['anilist', 'mal', 'imdb', 'letterboxd']);
 
 function configurePageHandler(req, res) {
-  const host = req.headers.host || ('localhost:' + config.port);
-  const protocol = req.headers['x-forwarded-proto'] || 'http';
-  const baseUrl = protocol + '://' + host;
   const anilistOk = !!config.anilistClientId;
   const malOauthOk = !!(config.malClientId && config.malClientSecret);
   const letterboxdOk = !!(config.letterboxdClientId && config.letterboxdClientSecret);
@@ -77,7 +74,7 @@ function configurePageHandler(req, res) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Anime Stremio Addon</title>
+  <title>AniSync — Configure your Stremio addon</title>
   <style>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#080810;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}
@@ -121,9 +118,157 @@ function configurePageHandler(req, res) {
     .svc-checkbox-label{font-size:.78rem;color:#aaa;user-select:none}
     .svc-status{font-size:.78rem;color:#4ade80;font-weight:500;display:none}
     .svc-status.show{display:inline}
+
+    /* AniSync dashboard — adapted from the Lovable project without adding a second app */
+    :root{color-scheme:dark;--bg:#11101a;--panel:rgba(29,27,43,.78);--card:#1d1b2b;--card-2:#232036;--text:#f8f7ff;--muted:#aaa5bc;--faint:#777187;--line:rgba(174,164,207,.18);--primary:#a779ff;--primary-2:#7f69ff;--success:#54d997;--warning:#f3c866;--danger:#ff7878;--anilist:#52b7ff;--mal:#6d8cff;--imdb:#f5c518;--letterboxd:#42d17a}
+    html{scroll-behavior:smooth}
+    body{display:block;padding:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;line-height:1.5}
+    body::before{z-index:-2;background:radial-gradient(ellipse 70% 48% at 10% 0%,rgba(126,83,255,.24),transparent 68%),radial-gradient(ellipse 62% 42% at 95% 8%,rgba(58,117,255,.18),transparent 64%),radial-gradient(ellipse 45% 30% at 50% 105%,rgba(172,74,255,.12),transparent 65%)}
+    body::after{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.28;background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);background-size:44px 44px;mask-image:linear-gradient(to bottom,black,transparent 75%)}
+    button,a,input{font:inherit}
+    a{color:#bea5ff}
+    .topbar{position:sticky;top:0;z-index:20;border-bottom:1px solid var(--line);background:rgba(17,16,26,.72);backdrop-filter:blur(18px) saturate(140%)}
+    .topbar-inner{width:min(1180px,calc(100% - 2rem));height:64px;margin:auto;display:flex;align-items:center;justify-content:space-between}
+    .brand{display:flex;align-items:center;gap:.7rem;color:var(--text);text-decoration:none}
+    .brand-mark{width:38px;height:38px;display:grid;place-items:center;border-radius:12px;background:linear-gradient(135deg,var(--primary),#c55cff 55%,#6d74ff);box-shadow:0 10px 28px rgba(156,100,255,.3);font-weight:900}
+    .brand-name{display:block;font-weight:750;letter-spacing:-.02em;line-height:1.05}
+    .brand-sub{display:block;margin-top:.2rem;color:var(--muted);font-size:.64rem;letter-spacing:.15em;text-transform:uppercase}
+    .top-actions{display:flex;align-items:center;gap:.65rem}
+    .server-pill{display:inline-flex;align-items:center;gap:.5rem;padding:.38rem .72rem;border:1px solid rgba(84,217,151,.28);border-radius:999px;background:rgba(84,217,151,.08);color:#81e9b5;font-size:.75rem}
+    .server-dot{position:relative;width:7px;height:7px;border-radius:50%;background:var(--success);box-shadow:0 0 0 4px rgba(84,217,151,.08)}
+    .help-btn{border:0;background:transparent;color:var(--muted);padding:.5rem .7rem;border-radius:9px;cursor:pointer}
+    .help-btn:hover{background:rgba(255,255,255,.06);color:var(--text)}
+    .shell{width:min(1180px,calc(100% - 2rem));margin:0 auto;padding:3.25rem 0 3rem}
+    .eyebrow{display:flex;align-items:center;gap:.6rem;color:var(--muted);font-size:.76rem}
+    .preview-badge{display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .55rem;border:1px solid rgba(167,121,255,.26);border-radius:999px;background:rgba(167,121,255,.1);color:#d7c5ff;font-weight:650}
+    .hero h1{max-width:820px;margin-top:1rem;color:var(--text);font-family:'Space Grotesk',Inter,ui-sans-serif,sans-serif;font-size:clamp(2.5rem,6vw,4.4rem);font-weight:680;line-height:1.02;letter-spacing:-.055em}
+    .hero-gradient{background:linear-gradient(115deg,#fff 0%,#c7a7ff 50%,#a977ff 78%,#c85cff 100%);background-clip:text;-webkit-background-clip:text;color:transparent}
+    .hero-copy{max-width:720px;margin-top:1.1rem;color:var(--muted);font-size:clamp(1rem,2vw,1.16rem)}
+    .stepper{display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem;margin:2.5rem 0 2.25rem;list-style:none}
+    .step{display:flex;align-items:center;gap:.75rem;padding:.78rem;border:1px solid var(--line);border-radius:13px;background:rgba(31,29,45,.5);color:var(--muted);font-size:.82rem;transition:.2s ease}
+    .step-number{display:grid;place-items:center;width:30px;height:30px;flex:0 0 30px;border-radius:50%;background:#2c293c;color:#8f899e;font-weight:700}
+    .step.active{border-color:rgba(167,121,255,.44);background:rgba(143,92,255,.1);color:var(--text)}
+    .step.active .step-number{background:linear-gradient(135deg,var(--primary),var(--primary-2));color:#16121f}
+    .step.done{border-color:rgba(84,217,151,.28);background:rgba(84,217,151,.05)}
+    .step.done .step-number{background:var(--success);color:#112118}
+    .dashboard-section{margin-top:2.2rem}
+    .dashboard-heading{display:flex;align-items:flex-start;gap:.7rem;margin-bottom:1rem}
+    .heading-icon{display:grid;place-items:center;width:28px;height:28px;border:1px solid var(--line);border-radius:8px;background:rgba(255,255,255,.035);color:#cbb8ff;font-size:.82rem}
+    .dashboard-heading h2{font-size:1rem;font-weight:700;letter-spacing:-.01em}
+    .dashboard-heading p{margin-top:.12rem;color:var(--muted);font-size:.82rem}
+    .card{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;max-width:none;padding:0;background:transparent;border:0;border-radius:0;box-shadow:none}
+    .card>.logo,.card>.subtitle{display:none}
+    .card>.section{min-width:0;margin:0;padding:1.15rem;border:1px solid var(--line);border-radius:15px;background:linear-gradient(145deg,rgba(35,32,54,.9),rgba(25,24,38,.86));box-shadow:0 24px 55px -42px #000;transition:transform .18s,border-color .18s}
+    .card>.section:not(#install-all-section):hover{transform:translateY(-2px);border-color:rgba(174,164,207,.3)}
+    .section-header{margin-bottom:.55rem}
+    .section-title{font-size:.95rem}
+    .section-badge{width:33px;height:33px;border-radius:10px;font-weight:800}
+    .badge-anilist{background:rgba(82,183,255,.14);border:1px solid rgba(82,183,255,.25);color:var(--anilist)}
+    .badge-mal{background:rgba(109,140,255,.14);border:1px solid rgba(109,140,255,.25);color:#9bb0ff}
+    .badge-imdb{background:rgba(245,197,24,.14);border:1px solid rgba(245,197,24,.25);color:var(--imdb)}
+    .badge-letterboxd{background:rgba(66,209,122,.14)!important;border:1px solid rgba(66,209,122,.25);color:var(--letterboxd)}
+    .service-tagline{margin:0 0 1rem 2.7rem;color:var(--muted);font-size:.75rem}
+    .svc-checkbox-wrap{opacity:.55;gap:.38rem}
+    .svc-checkbox-wrap.enabled{opacity:1}
+    .svc-checkbox-wrap input[type=checkbox]{accent-color:var(--primary)}
+    .svc-checkbox-label{color:var(--muted)}
+    .svc-status{color:var(--success)}
+    .btn{min-height:38px;border-radius:9px;justify-content:center;transition:transform .16s,filter .16s,box-shadow .16s}
+    .btn:focus-visible,.help-btn:focus-visible,input:focus-visible,.copy-btn:focus-visible{outline:3px solid rgba(167,121,255,.38);outline-offset:2px}
+    .btn-login{width:100%;background:#2a273b;border:1px solid var(--line);box-shadow:none;color:var(--text)}
+    .btn-login:hover{background:#322e48;box-shadow:none;filter:none}
+    .btn-switch{color:var(--muted);text-decoration:none}
+    .btn-switch:hover{color:var(--text)}
+    .hint{color:var(--muted);line-height:1.45}
+    .hint.err{color:var(--danger)}
+    .field-label{color:var(--muted);letter-spacing:.1em}
+    input{padding:.68rem .78rem;background:rgba(13,12,21,.48);border-color:var(--line);font-size:.9rem}
+    input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(167,121,255,.12)}
+    .warn,.err-box{border-radius:9px;margin:.6rem 0 1rem;line-height:1.45}
+    .warn{background:rgba(78,59,11,.23);border-color:rgba(243,200,102,.25);color:#f4d88f}
+    .err-box{background:rgba(87,25,35,.2);border-color:rgba(255,120,120,.25);color:#ffa2a2}
+    .catalog-panel{grid-column:1/-1!important;display:block!important;padding:1.2rem!important}
+    .catalog-title{display:flex;align-items:center;justify-content:space-between;gap:1rem}
+    .catalog-title strong{font-size:.92rem}
+    .catalog-title span{color:var(--muted);font-size:.75rem}
+    .catalog-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem;margin-top:.9rem}
+    .catalog-group{display:none;padding:.8rem;border:1px solid var(--line);border-radius:10px;background:rgba(13,12,21,.28)}
+    .catalog-group.show{display:block}
+    .catalog-group-head{display:flex;align-items:center;gap:.5rem;font-size:.78rem;font-weight:700}
+    .dot-anilist,.dot-mal,.dot-imdb,.dot-letterboxd{width:7px;height:7px;border-radius:50%}
+    .dot-anilist{background:var(--anilist)}.dot-mal{background:var(--mal)}.dot-imdb{background:var(--imdb)}.dot-letterboxd{background:var(--letterboxd)}
+    .chip-row{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.65rem}
+    .chip{padding:.25rem .52rem;border:1px solid var(--line);border-radius:999px;color:#c2bdcc;background:rgba(255,255,255,.025);font-size:.7rem}
+    .catalog-empty{padding:.95rem;border:1px dashed var(--line);border-radius:10px;color:var(--muted);font-size:.8rem;text-align:center}
+    #install-all-section{grid-column:1/-1;padding:1.25rem!important;background:linear-gradient(135deg,rgba(119,77,205,.17),rgba(39,33,67,.86))!important;border-color:rgba(167,121,255,.25)!important;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1rem;align-items:center}
+    .install-copy{min-width:0}
+    .install-copy h3{font-size:1rem}
+    .install-copy p{margin-top:.2rem;color:var(--muted);font-size:.8rem}
+    .manifest-row{display:flex;align-items:center;gap:.5rem;margin-top:.8rem;padding:.48rem .55rem .48rem .75rem;border:1px solid var(--line);border-radius:9px;background:rgba(12,11,20,.4)}
+    .manifest-row code{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:.72rem}
+    .copy-btn{border:0;border-radius:7px;padding:.34rem .55rem;background:transparent;color:#cbb8ff;cursor:pointer;font-size:.72rem}
+    .copy-btn:disabled{opacity:.35;cursor:not-allowed}
+    #install-all-btn{width:auto!important;min-width:190px;padding:.78rem 1.05rem!important;background:linear-gradient(135deg,var(--primary),#bd5cff 55%,var(--primary-2));box-shadow:0 10px 28px rgba(154,97,255,.28);color:#17121f}
+    #install-hint{display:none}
+    .note{display:none}
+    .diagnostics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid var(--line);border-radius:15px;background:var(--panel);overflow:hidden;backdrop-filter:blur(14px)}
+    .diag-row{display:flex;align-items:flex-start;gap:.75rem;padding:1rem;border-bottom:1px solid var(--line)}
+    .diag-row:nth-child(odd){border-right:1px solid var(--line)}
+    .diag-row:nth-last-child(-n+2){border-bottom:0}
+    .diag-icon{width:9px;height:9px;margin-top:.3rem;border-radius:50%;background:var(--success);box-shadow:0 0 0 4px rgba(84,217,151,.08)}
+    .diag-icon.warn{background:var(--warning);box-shadow:0 0 0 4px rgba(243,200,102,.08)}
+    .diag-label{color:var(--muted);font-size:.64rem;letter-spacing:.14em;text-transform:uppercase}
+    .diag-value{margin-top:.16rem;font-size:.82rem;overflow-wrap:anywhere}
+    footer{margin-top:3rem;padding-top:1.25rem;border-top:1px solid var(--line);color:var(--faint);font-size:.72rem;text-align:center}
+    dialog{width:min(500px,calc(100% - 2rem));padding:0;border:1px solid var(--line);border-radius:16px;background:#1d1b2b;color:var(--text);box-shadow:0 30px 90px #000}
+    dialog::backdrop{background:rgba(5,4,10,.72);backdrop-filter:blur(5px)}
+    .dialog-inner{padding:1.3rem}
+    .dialog-head{display:flex;align-items:center;justify-content:space-between;gap:1rem}
+    .dialog-head h2{font-size:1.05rem}
+    .dialog-close{border:0;background:transparent;color:var(--muted);font-size:1.25rem;cursor:pointer}
+    .help-list{margin-top:1rem;display:grid;gap:.6rem}
+    .help-list details{padding:.75rem;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.025)}
+    .help-list summary{cursor:pointer;font-size:.84rem;font-weight:650}
+    .help-list p{margin-top:.55rem;color:var(--muted);font-size:.78rem;line-height:1.55}
+    .toast-stack{position:fixed;top:78px;right:1rem;z-index:50;display:grid;gap:.5rem}
+    .toast{max-width:320px;padding:.75rem .9rem;border:1px solid var(--line);border-radius:10px;background:#28243a;color:var(--text);box-shadow:0 12px 35px #000;font-size:.8rem;animation:toast-in .2s ease-out}
+    @keyframes toast-in{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+    @media(max-width:760px){.shell{padding-top:2.2rem}.server-pill{display:none}.stepper{grid-template-columns:1fr}.step{padding:.58rem}.step-number{width:26px;height:26px;flex-basis:26px}.card{grid-template-columns:1fr}.catalog-groups{grid-template-columns:1fr}#install-all-section{grid-template-columns:1fr}#install-all-btn{width:100%!important}.diagnostics{grid-template-columns:1fr}.diag-row,.diag-row:nth-child(odd){border-right:0;border-bottom:1px solid var(--line)}.diag-row:last-child{border-bottom:0}}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}}
   </style>
 </head>
 <body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#top" aria-label="AniSync home">
+        <span class="brand-mark" aria-hidden="true">✦</span>
+        <span><span class="brand-name">AniSync</span><span class="brand-sub">for Stremio</span></span>
+      </a>
+      <div class="top-actions">
+        <span class="server-pill"><span class="server-dot"></span>Server online</span>
+        <button class="help-btn" type="button" onclick="openHelp()">Help</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell" id="top">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="eyebrow"><span class="preview-badge">✦ Live configuration</span><span>Self-hosted · Free &amp; open source</span></div>
+      <h1 id="page-title">Your watchlists, <span class="hero-gradient">unified in Stremio.</span></h1>
+      <p class="hero-copy">Connect AniList, MyAnimeList, IMDb, and Letterboxd. Install one combined addon and keep watching where you left off.</p>
+    </section>
+
+    <ol class="stepper" aria-label="Setup progress">
+      <li class="step active" id="step-1"><span class="step-number">1</span><span>Connect services</span></li>
+      <li class="step" id="step-2"><span class="step-number">2</span><span>Review catalogs</span></li>
+      <li class="step" id="step-3"><span class="step-number">3</span><span>Install addon</span></li>
+    </ol>
+
+    <section class="dashboard-section" aria-labelledby="services-heading">
+      <div class="dashboard-heading">
+        <span class="heading-icon" aria-hidden="true">↗</span>
+        <div><h2 id="services-heading">Connect services</h2><p>Link one or more sources. Credentials stay on your self-hosted server.</p></div>
+      </div>
   <div class="card">
     <div class="logo">
       <div class="logo-icon">&#x1F3AC;</div>
@@ -141,6 +286,7 @@ function configurePageHandler(req, res) {
           <span class="svc-status" id="al-status">&#x2713; Connected</span>
         </label>
       </div>
+      <p class="service-tagline">Anime lists and progress via OAuth</p>
       ${!anilistOk ? '<div class="err-box"><strong>ANILIST_CLIENT_ID not set.</strong> Add it to .env and restart.</div>' : ''}
       <div id="al-pre"${!anilistOk ? ' style="display:none"' : ''}>
         <button class="btn btn-login" onclick="alLogin()">&#x1F511;&nbsp; Login with AniList</button>
@@ -161,6 +307,7 @@ function configurePageHandler(req, res) {
           <span class="svc-status" id="mal-status">&#x2713; Connected</span>
         </label>
       </div>
+      <p class="service-tagline">Anime lists and progress via OAuth</p>
       ${!malOauthOk ? '<div class="warn">MAL support requires <strong>MAL_CLIENT_ID</strong> and <strong>MAL_CLIENT_SECRET</strong> in .env.<br>Register at <a href="https://myanimelist.net/apiconfig" target="_blank" rel="noopener">myanimelist.net/apiconfig</a>.</div>' : ''}
       <div id="mal-pre"${!malOauthOk ? ' style="display:none"' : ''}>
         <button class="btn btn-login" onclick="malConnect()">&#x1F511;&nbsp; Connect to MyAnimeList</button>
@@ -182,6 +329,7 @@ function configurePageHandler(req, res) {
           <span class="svc-status" id="imdb-status">&#x2713; Ready</span>
         </label>
       </div>
+      <p class="service-tagline">Public watchlist by user ID</p>
       <div id="imdb-form">
         <label class="field-label" for="imdb-userid">IMDB User ID</label>
         <input type="text" id="imdb-userid" placeholder="e.g. ur12345678 or paste profile URL"
@@ -193,13 +341,14 @@ function configurePageHandler(req, res) {
     <!-- Letterboxd section -->
     <div class="section">
       <div class="section-header">
-        <div class="section-title"><span class="section-badge" style="background:linear-gradient(135deg,#16a34a,#166534)">L</span> Letterboxd</div>
+        <div class="section-title"><span class="section-badge badge-letterboxd">L</span> Letterboxd</div>
         <label class="svc-checkbox-wrap" id="lb-cb-wrap" title="Include Letterboxd in install">
           <input type="checkbox" id="lb-include" disabled onchange="updateInstallAll()">
           <span class="svc-checkbox-label">Include</span>
           <span class="svc-status" id="lb-status">&#x2713; Connected</span>
         </label>
       </div>
+      <p class="service-tagline">Film watchlist and watched history</p>
       ${!letterboxdOk ? '<div class="warn">Letterboxd support requires <strong>LETTERBOXD_CLIENT_ID</strong> and <strong>LETTERBOXD_CLIENT_SECRET</strong> in .env.</div>' : ''}
       <div id="lb-pre"${!letterboxdOk ? ' style="display:none"' : ''}>
         <label class="field-label" for="lb-username">Letterboxd Username</label>
@@ -216,17 +365,67 @@ function configurePageHandler(req, res) {
       </div>
     </div>
 
+    <div class="section catalog-panel" id="catalog-panel">
+      <div class="catalog-title"><strong>Catalogs exposed in Stremio</strong><span>Filters are selected inside Stremio</span></div>
+      <div class="catalog-groups" id="catalog-groups">
+        <div class="catalog-empty" id="catalog-empty">Connect and include a service to preview its catalog filters.</div>
+        <div class="catalog-group" data-catalog="anilist"><div class="catalog-group-head"><span class="dot-anilist"></span>AniList · Anime</div><div class="chip-row"><span class="chip">Currently Watching</span><span class="chip">On Hold</span><span class="chip">Plan to Watch</span><span class="chip">Dropped</span><span class="chip">Completed</span><span class="chip">Rewatching</span></div></div>
+        <div class="catalog-group" data-catalog="mal"><div class="catalog-group-head"><span class="dot-mal"></span>MyAnimeList · Anime</div><div class="chip-row"><span class="chip">Currently Watching</span><span class="chip">On Hold</span><span class="chip">Plan to Watch</span><span class="chip">Dropped</span><span class="chip">Completed</span></div></div>
+        <div class="catalog-group" data-catalog="imdb"><div class="catalog-group-head"><span class="dot-imdb"></span>IMDb · Movies &amp; series</div><div class="chip-row"><span class="chip">Watchlist</span></div></div>
+        <div class="catalog-group" data-catalog="letterboxd"><div class="catalog-group-head"><span class="dot-letterboxd"></span>Letterboxd · Movies</div><div class="chip-row"><span class="chip">Watchlist</span><span class="chip">Watched</span></div></div>
+      </div>
+    </div>
+
     <!-- Install All section -->
     <div class="section" id="install-all-section">
+      <div class="install-copy">
+        <h3>Install your combined addon</h3>
+        <p id="install-summary">Connect at least one service to generate a manifest.</p>
+        <div class="manifest-row"><code id="manifest-url">No manifest generated yet</code><button class="copy-btn" id="copy-manifest" type="button" onclick="copyManifest()" disabled>Copy</button></div>
+      </div>
       <a class="btn btn-stremio" id="install-all-btn" href="#" style="width:100%;justify-content:center;padding:.85rem;font-size:1rem;border-radius:10px;text-decoration:none;pointer-events:none;opacity:.4">&#x25B6;&nbsp; Install in Stremio</a>
       <p class="hint" style="text-align:center;margin-top:.5rem" id="install-hint">Connect a service above, then check it to install.</p>
     </div>
 
     <p class="note">Currently Watching &bull; On Hold &bull; Plan to Watch &bull; Dropped &bull; Completed &bull; Rewatching</p>
   </div>
+    </section>
+
+    <section class="dashboard-section" aria-labelledby="diagnostics-heading">
+      <div class="dashboard-heading">
+        <span class="heading-icon" aria-hidden="true">✓</span>
+        <div><h2 id="diagnostics-heading">Diagnostics</h2><p>Live readiness of this self-hosted backend.</p></div>
+      </div>
+      <div class="diagnostics">
+        <div class="diag-row"><span class="diag-icon"></span><div><div class="diag-label">Backend URL</div><div class="diag-value" id="backend-url">Current server</div></div></div>
+        <div class="diag-row"><span class="diag-icon${anilistOk ? '' : ' warn'}"></span><div><div class="diag-label">AniList OAuth</div><div class="diag-value">${anilistOk ? 'Ready' : 'Missing ANILIST_CLIENT_ID'}</div></div></div>
+        <div class="diag-row"><span class="diag-icon${malOauthOk ? '' : ' warn'}"></span><div><div class="diag-label">MyAnimeList OAuth</div><div class="diag-value">${malOauthOk ? 'Ready' : 'Missing MAL client credentials'}</div></div></div>
+        <div class="diag-row"><span class="diag-icon${letterboxdOk ? '' : ' warn'}"></span><div><div class="diag-label">Letterboxd login</div><div class="diag-value">${letterboxdOk ? 'Ready' : 'Missing Letterboxd client credentials'}</div></div></div>
+        <div class="diag-row"><span class="diag-icon"></span><div><div class="diag-label">Token storage</div><div class="diag-value">Managed on this server</div></div></div>
+        <div class="diag-row"><span class="diag-icon"></span><div><div class="diag-label">Progress sync</div><div class="diag-value">AniList and MAL · after 5 minutes</div></div></div>
+      </div>
+    </section>
+
+    <footer>AniSync · Self-hosted · Not affiliated with Stremio, AniList, MyAnimeList, IMDb, or Letterboxd.</footer>
+  </main>
+
+  <dialog id="help-dialog" aria-labelledby="help-title">
+    <div class="dialog-inner">
+      <div class="dialog-head"><h2 id="help-title">Troubleshooting</h2><button class="dialog-close" type="button" onclick="closeHelp()" aria-label="Close help">×</button></div>
+      <div class="help-list">
+        <details><summary>OAuth redirect mismatch</summary><p>Register this server's exact AniList and MyAnimeList callback URLs. The protocol, hostname, port, and path must match.</p></details>
+        <details><summary>Missing environment variables</summary><p>Add the client ID and secret for the affected service to <code>.env</code>, then restart the server.</p></details>
+        <details><summary>Private IMDb watchlist</summary><p>Open IMDb privacy settings and make the watchlist public. AniSync reads the public profile URL.</p></details>
+        <details><summary>Progress is not updating</summary><p>AniList and MAL progress updates are sent after the same episode has been open for at least five minutes.</p></details>
+        <details><summary>Letterboxd session expired</summary><p>Reconnect the account. The server replaces the expired token with a new opaque addon token.</p></details>
+      </div>
+    </div>
+  </dialog>
+  <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
   <script>
-    var BASE = '${baseUrl}';
+    var BASE = window.location.origin;
+    document.getElementById('backend-url').textContent = BASE;
 
     // On return from OAuth callbacks the result comes back in the hash
     (function() {
@@ -521,19 +720,85 @@ function configurePageHandler(req, res) {
       var keys = Object.keys(cfg);
       var btn = document.getElementById('install-all-btn');
       var hint = document.getElementById('install-hint');
+      var manifest = document.getElementById('manifest-url');
+      var copyBtn = document.getElementById('copy-manifest');
+      var summary = document.getElementById('install-summary');
+      var url = keys.length >= 1 ? buildCombinedUrl(cfg) : null;
       if (keys.length >= 1) {
-        var url = buildCombinedUrl(cfg);
         btn.href = 'stremio://' + url.replace(/^https?:\\/\\//, '');
         btn.style.pointerEvents = '';
         btn.style.opacity = '1';
         hint.textContent = keys.length === 1 ? 'Installing 1 service.' : 'Installing ' + keys.length + ' services combined.';
+        manifest.textContent = url;
+        copyBtn.disabled = false;
+        summary.textContent = keys.length === 1
+          ? '1 service ready. Its catalog filters will appear inside Stremio.'
+          : keys.length + ' services ready in one combined manifest.';
       } else {
         btn.href = '#';
         btn.style.pointerEvents = 'none';
         btn.style.opacity = '.4';
         hint.textContent = 'Connect a service above, then check it to install.';
+        manifest.textContent = 'No manifest generated yet';
+        copyBtn.disabled = true;
+        summary.textContent = 'Connect at least one service to generate a manifest.';
+      }
+
+      var catalogNodes = document.querySelectorAll('[data-catalog]');
+      for (var i = 0; i < catalogNodes.length; i++) {
+        var name = catalogNodes[i].getAttribute('data-catalog');
+        catalogNodes[i].classList.toggle('show', keys.indexOf(name) !== -1);
+      }
+      document.getElementById('catalog-empty').style.display = keys.length ? 'none' : 'block';
+
+      var checkboxIds = ['al-include', 'mal-include', 'imdb-include', 'lb-include'];
+      var connected = checkboxIds.some(function(id) {
+        var input = document.getElementById(id);
+        return input && !input.disabled;
+      });
+      var activeStep = !connected ? 1 : keys.length === 0 ? 2 : 3;
+      for (var step = 1; step <= 3; step++) {
+        var stepEl = document.getElementById('step-' + step);
+        stepEl.classList.toggle('active', step === activeStep);
+        stepEl.classList.toggle('done', step < activeStep);
+        document.querySelector('#step-' + step + ' .step-number').textContent = step < activeStep ? '✓' : String(step);
       }
     }
+
+    function showToast(message) {
+      var stack = document.getElementById('toast-stack');
+      var item = document.createElement('div');
+      item.className = 'toast';
+      item.textContent = message;
+      stack.appendChild(item);
+      window.setTimeout(function() { item.remove(); }, 2800);
+    }
+
+    function copyManifest() {
+      var value = document.getElementById('manifest-url').textContent;
+      if (!value || value === 'No manifest generated yet') return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(value).then(function() { showToast('Manifest URL copied'); });
+        return;
+      }
+      var textarea = document.createElement('textarea');
+      textarea.value = value;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+      showToast('Manifest URL copied');
+    }
+
+    function openHelp() { document.getElementById('help-dialog').showModal(); }
+    function closeHelp() { document.getElementById('help-dialog').close(); }
+
+    document.getElementById('help-dialog').addEventListener('click', function(event) {
+      if (event.target === this) closeHelp();
+    });
 
     // Initial check
     updateInstallAll();
